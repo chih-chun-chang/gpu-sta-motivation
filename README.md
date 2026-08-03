@@ -8,6 +8,64 @@ axes into an argument for parallel hardware instead of coroutines.
 
 Talking points and anticipated audience questions: **[SPEAKER_NOTES.md](SPEAKER_NOTES.md)**.
 
+## Status
+
+**Built and measured** on i5-13500 + RTX A4000: the STA kernel (shared verbatim by
+CPU and GPU), a CPU parallelism sweep, a GPU run with transfer breakdown, four
+figures in light and dark, and speaker notes. All numbers below are reproducible
+with `./run_all.sh && python3 plot.py`.
+
+**The intended three-act narrative**, with measured numbers for each act:
+
+| act | approach | result | what's actually limiting it |
+|---|---|---:|---|
+| 1 | one `std::thread` per work item | 0.009 GB/s | thread **creation** (~7.5 µs each vs ~50 ns of work) |
+| 2 | thread pool / `std::for_each(par_unseq)` | 48.9 GB/s | **memory bandwidth** — saturates at 5–6 of 14 cores |
+| 3 | GPU, data resident | 429.7 GB/s | bandwidth again, but 8.8× more of it |
+| 3b | GPU, naive copy-in/copy-out | 11.9 GB/s | **PCIe** — 91% of the time is H2D |
+
+Act 2's bottleneck is thread *creation*, **not context switching**. That was
+measured, and the data is unambiguous: 512 compute-bound threads cause ~9,900
+context switches/sec against a ~6,400/sec idle baseline, with throughput
+unchanged. A blocking-I/O workload at 4096 threads causes 765,000/sec. Saying "the
+pool fixes context switching" would not survive a question from the audience;
+"the pool removes creation overhead and reveals the memory wall" does.
+
+Act 1 will **not** reproduce the shape of the CppCon slides, and shouldn't: their
+work item is a 10 ms blocking sleep, so their curve peaks and collapses. Ours is
+50 ns of arithmetic, so it is a flat line rate-limited by the spawner.
+
+**Open decisions**
+
+- `02_io_vs_sta_contrast.png` currently frames the contrast as an argument for
+  coroutines. This talk is not about coroutines — the figure should probably be
+  replaced by act 1 vs act 2 (thread-per-item vs pool), which serves the narrative
+  directly. Not yet done.
+- A roofline chart is **not** built. Recommended as a backup slide rather than one
+  of the main four: it turns the measurement into a prediction (0.25 flops/byte →
+  speedup should equal the bandwidth ratio; 448/49 = 9.1 predicted vs 8.8
+  measured), which is useful when re-running on new hardware.
+
+## Porting to H100
+
+`make` uses `-arch=native`, so the build needs no change. Four things do:
+
+1. **Increase `--nodes`.** The kernel is 1.33 ms on an A4000 and would be ~0.2 ms
+   on H100 — too short to time cleanly. 80 GB of HBM has room for a much larger
+   graph.
+2. **Expect the gap to narrow.** An H100 host is usually a server CPU with 8–12
+   memory channels doing 200–400 GB/s, not this desktop's ~49. Plan for roughly
+   10–15×, not 68×.
+3. **Act 3 gets stronger, not weaker.** PCIe 5 roughly halves the copy, but the
+   kernel gets ~7× faster, so transfer rises to ~98% of a naive port.
+4. **Check which H100 it is.** On SXM/NVLink or a Grace-Hopper C2C system the
+   transfer story changes qualitatively and act 3 needs reframing, not just
+   re-measuring.
+
+Also reinstall TBB on the new machine (`conda install -c conda-forge tbb-devel`)
+or point `make TBB_ROOT=...` at it. Without it `std::execution::par` silently runs
+sequentially — `make tbb-check` will tell you.
+
 ## The kernel
 
 Block-based STA propagates arrival times forward through the timing graph:
@@ -31,6 +89,7 @@ CUDA 12.6 · gcc 13.3 · TBB 2022
 
 | | achieved GB/s | vs. best CPU |
 |---|---:|---:|
+| one `std::thread` per work item | 0.009 | 0.0002× |
 | 1 CPU thread | 22.2 | 0.46× |
 | CPU, saturated plateau (6+ threads) | ~47–48 | 0.97× |
 | **CPU, best observed** | **48.9** | **1.0×** |
