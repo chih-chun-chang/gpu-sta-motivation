@@ -34,8 +34,21 @@
 
 namespace sta {
 
-// Fanin per node: the "window" the max is taken over.
-constexpr int kFanin = 8;
+// Fanin per node: the "window" the max is taken over. Compile-time on purpose --
+// it sets the inner trip count, so the compiler can unroll and vectorise it.
+// Override at build time with -DSTA_FANIN=n; both binaries must agree or the
+// CPU/GPU checksums will not compare.
+#ifndef STA_FANIN
+#define STA_FANIN 8
+#endif
+constexpr int kFanin = STA_FANIN;
+
+// Values are float, not double, and that is a bandwidth decision rather than a
+// precision one. This kernel is memory bound at ~0.25 flops/byte, so doubles
+// would move 136 bytes per node instead of 68 and roughly halve throughput on
+// CPU and GPU alike. (On the RTX A4000 doubles would also hit a 1/64-rate FP64
+// path; on H100/GH200 FP64 runs at 1/2 rate, so there the cost really is just
+// the extra bytes.)
 
 enum class Layout { Soa, Aos };
 

@@ -1,4 +1,4 @@
 impl,layout,edges_per_sec,gb_per_sec,checksum_ok
-gpu_kernel,soa,49717607580,422.60,1
-gpu_with_transfer,soa,1385947120,11.78,1
-gpu_managed,soa,3280693692,27.89,1
+gpu_kernel,soa,49761145794,422.97,1
+gpu_with_transfer,soa,1376948925,11.70,1
+gpu_managed,soa,3308032399,28.12,1

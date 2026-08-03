@@ -7,10 +7,10 @@
 //   gpu_with_transfer   H2D the two vectors, propagate, D2H the result, every
 //                       pass -- what a naive "offload this function" port does.
 //   breakdown           milliseconds split across H2D / kernel / D2H, so the
-//                       audience can see PCIe dwarf the compute.
+//                       audience can see the link dwarf the compute.
 //
-// Host staging buffers are PINNED, which is the best case for PCIe. If transfer
-// still dominates with pinned memory, it dominates for everyone.
+// Host staging buffers are PINNED, the best case for the link. If transfer still
+// dominates with pinned memory, it dominates for everyone.
 //
 // Output: two CSVs (see --out and --breakdown-out).
 
@@ -203,7 +203,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "nodes=%zu edges=%zu working_set=%.0f MB layout=%s reps=%d\n", n,
                  edges, pass_bytes / 1048576.0, layout_name, reps);
 
-    // ---- device buffers, generated on-device so we never wait on PCIe here --
+    // ---- device buffers, generated on-device so we never wait on the link ---
     float *d_a = nullptr, *d_d = nullptr, *d_out = nullptr;
     CUDA_CHECK(cudaMalloc(&d_a, edge_bytes));
     CUDA_CHECK(cudaMalloc(&d_d, edge_bytes));
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
     const double kern_eps = edges / (kernel_ms / 1e3);
     const double kern_gbs = pass_bytes / (kernel_ms / 1e3) / 1e9;
 
-    // ---- 2. with transfer, pinned staging (PCIe best case) -----------------
+    // ---- 2. with transfer, pinned staging (link best case) -----------------
     float *p_a = nullptr, *p_d = nullptr, *p_out = nullptr;
     CUDA_CHECK(cudaHostAlloc(&p_a, edge_bytes, cudaHostAllocDefault));
     CUDA_CHECK(cudaHostAlloc(&p_d, edge_bytes, cudaHostAllocDefault));
@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
     const double xfer_eps = edges / (total_ms / 1e3);
     const double xfer_gbs = pass_bytes / (total_ms / 1e3) / 1e9;
 
-    std::fprintf(stderr, "h2d=%.2fms kernel=%.2fms d2h=%.2fms  (PCIe %.1f GB/s)\n", h2d_ms,
+    std::fprintf(stderr, "h2d=%.2fms kernel=%.2fms d2h=%.2fms  (host-device link %.1f GB/s)\n", h2d_ms,
                  konly_ms, d2h_ms, (2.0 * edge_bytes) / (h2d_ms / 1e3) / 1e9);
 
     // ---- 3. unified memory, no explicit copies at all ----------------------
