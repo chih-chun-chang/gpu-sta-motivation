@@ -1,8 +1,10 @@
 # Opening segment — speaker notes
 
-Four figures, ~6–8 minutes. The arc is: *you already can't use the CPU you have →
-the GPU is genuinely faster → but the obvious way to use it is slower than doing
-nothing → so this talk is about architecture, not kernels.*
+Four figures, ~6–8 minutes, in three acts: *one thread per work item → a thread
+pool → the GPU*, measuring at each step what is actually limiting you. The arc is:
+*you already can't use the CPU you have → the GPU is genuinely faster → but the
+obvious way to use it is slower than doing nothing → so this talk is about
+architecture, not kernels.*
 
 Numbers below are from this machine (i5-13500, 14 cores; RTX A4000). Re-run
 `./run_all.sh` and update them if you present on different hardware — every
@@ -51,29 +53,33 @@ Talking points:
 
 ---
 
-## Figure 2 — `02_io_vs_sta_contrast.png`
+## Figure 2 — `02_naive_vs_pool.png`
 
-**The one sentence:** *"The fix depends entirely on what you ran out of."*
+**The one sentence:** *"A thread pool buys you five thousand times. It does not buy
+you the machine."*
 
-This is the figure that earns you credibility with the C++ people in the room.
+This is act 1 meeting act 2. Both axes are log, because the gap is four decades.
 
-- Orange is a blocking-I/O workload — the benchmark from Conor Spilsbury's CppCon
-  2025 "Threads vs. Coroutines" talk. It keeps climbing past 4000 threads, ~4000×.
-- Blue is our STA kernel. Flat at 2.2×.
-- Same axis, both indexed to one thread, so the comparison is honest.
-- Orange threads are BLOCKED — they aren't using a core, so more of them find more
-  overlap, and the fix is cheaper scheduling: coroutines, `io_uring`, async.
-- Blue threads are RUNNING. There is no scheduling trick. You need more hardware.
+- The orange dashed line is one `std::thread` per work item: **0.009 GB/s**. Flat,
+  and it would stay flat however many you spawn — you are rate-limited by the
+  thread you're spawning *from*.
+- Why: a `clone()` costs about 7.5 µs. The work is about 50 ns. You are measuring
+  the operating system, not timing analysis. **150:1 overhead.**
+- The blue curve is the same kernel through `std::for_each(par_unseq)`. 5,000×
+  better — and then it stops at 6 of your 14 cores.
+- The move that matters: *"we deleted the obvious overhead and got five thousand
+  times. And we still can't use half the CPU. So the obvious overhead was never
+  the real problem."*
 
-Optional aside if the room is technical (I measured this, it holds up):
+That last line is the hinge of the whole opening. Say it slowly.
 
-> "You might expect the CPU-bound line to get *worse* — all that context
-> switching. It doesn't. At 512 compute threads the machine does about 10,000
-> context switches a second, barely above the 6,400 it does while idle. The
-> blocking version at 4096 threads does 765,000. A compute thread only switches
-> when its time slice expires; a blocking thread switches twice per work item. So
-> the CPU-bound line doesn't collapse — it just refuses to go up. Which is worse,
-> because there's no knob to turn."
+**Pre-empt the wrong diagnosis** — someone will suggest context switching, and it
+is worth being able to shut this down with data:
+
+> "You'd think this was context switching. It isn't. At 512 compute threads this
+> machine does about 10,000 context switches a second — the idle baseline is
+> 6,400. Throughput doesn't move at all. A compute thread only switches when its
+> time slice expires. It's not the scheduler. It's the memory bus."
 
 ---
 
@@ -93,6 +99,10 @@ Optional aside if the room is technical (I measured this, it holds up):
 - Then point at the third bar, the one **shorter than the CPU bar**: copy the
   vectors in, run the kernel, copy the answer back — 11.9 GB/s. You have just
   bought a GPU to make your tool 4× slower.
+- The fourth bar is unified memory — no explicit copies, let the driver migrate
+  pages on demand. 42.6 GB/s: 3.6× better than staged copies, and *still* just
+  under the CPU, because every page it touches still crosses PCIe. Worth one
+  sentence: **"and no, just not writing the memcpy doesn't save you either."**
 
 Let that sit for a beat before figure 4.
 
@@ -104,7 +114,12 @@ Let that sit for a beat before figure 4.
 
 - 43.8 ms copying in. 1.3 ms computing. 2.8 ms copying back.
 - Pre-empt the obvious objection yourself: *"and no, a faster link doesn't save
-  you — at full PCIe 4.0 speed this is still about 94% transfer."*
+  you — at full PCIe 4.0 speed this is still about 94% transfer. On an H100 over
+  PCIe 5 it gets"* — pause — *"worse. About 98%. Because the link roughly
+  quadruples and the kernel gets eight times faster."*
+- If you have GH200 numbers by then, this is where they land: NVLink-C2C is ~36×
+  this machine's link and *still* leaves you transfer-dominated (~88%). Which is
+  the cleanest possible proof that the answer was never a faster copy.
 - Land the thesis:
 
 > "So GPU-accelerated STA is not a kernel-porting problem. Every kernel in this

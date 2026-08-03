@@ -1,18 +1,19 @@
 // Throughput vs. number of threads.
 //
-// Same figure as the "Throughput vs Number of Threads" scatter plots from
-// Conor Spilsbury's CppCon 2025 talk "Threads vs. Coroutines" (slides 5 and 6),
-// but the default work item is CPU-bound, not a blocking read.
+// Reference benchmark, not part of the main figure set.
 //
-// That swap is the whole argument. With blocking I/O the thread is BLOCKED, so
-// stacking more threads keeps finding more overlap and throughput climbs long
-// past the core count -- which is why the talk reaches for coroutines. With
-// CPU-bound work every thread is RUNNING, so throughput stops at the number of
-// physical cores and stays there. No scheduler, pool, or coroutine moves that
-// line, because the machine has simply run out of places to compute. That is
-// the point where you need a GPU.
+// Measures throughput against thread count for two work items:
 //
-// --mode=io reproduces the talk's original curve for contrast.
+//   --mode=cpu   compute-bound (Mandelbrot rows). Kept for the roofline
+//                contrast: the same GPU gives ~72x here versus ~8.8x on the
+//                bandwidth-bound STA kernel, and the difference is arithmetic
+//                intensity.
+//   --mode=io    a blocking sleep. Throughput climbs far past the core count
+//                because a blocking thread is not using a core at all -- a
+//                useful reminder that "does adding threads help?" depends
+//                entirely on which resource you ran out of.
+//
+// The STA benchmarks (bench_sta, bench_sta_gpu) are what the talk uses.
 //
 // Method: spawn N threads that each loop over work items forever. After a
 // warmup, sample a global completed-item counter over a fixed window. Thread

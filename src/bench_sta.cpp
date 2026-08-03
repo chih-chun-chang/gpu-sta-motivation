@@ -59,6 +59,43 @@ void propagate_all(const std::vector<float>& arrival_in, const std::vector<float
                   });
 }
 
+// Act 1: one std::thread per work item, spawned as fast as the machine allows.
+// This is the strawman, and it is bounded by thread creation, not by the work:
+// a clone() costs ~7.5 us against ~50 ns of arithmetic, a 150:1 ratio. Nothing
+// about the number of threads changes that, so this is a single number rather
+// than a sweep.
+double run_thread_per_item(const std::vector<float>& arrival_in,
+                           const std::vector<float>& delay, std::vector<float>& out,
+                           sta::Layout layout, int measure_ms) {
+    const float* a = arrival_in.data();
+    const float* d = delay.data();
+    float* o = out.data();
+    const size_t n = out.size();
+
+    std::atomic<long long> done{0};
+    std::atomic<long long> live{0};
+    const auto t0 = Clock::now();
+    const auto deadline = t0 + std::chrono::milliseconds(measure_ms);
+
+    size_t i = 0;
+    while (Clock::now() < deadline) {
+        live.fetch_add(1, std::memory_order_relaxed);
+        std::thread([&, i] {
+            o[i] = sta::propagate(a, d, layout, n, i);
+            done.fetch_add(1, std::memory_order_relaxed);
+            live.fetch_sub(1, std::memory_order_relaxed);
+        }).detach();
+        // Stride so the spawned threads touch spread-out memory rather than
+        // hammering one cache line.
+        i = (i + 4099) % n;
+    }
+    const double secs = std::chrono::duration<double>(Clock::now() - t0).count();
+    while (live.load(std::memory_order_relaxed) > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return static_cast<double>(done.load()) / secs;  // nodes/sec
+}
+
 // Confirms whether the parallel policy is really running on more than one
 // thread -- i.e. whether TBB got linked in.
 size_t observed_threads(size_t n) {
@@ -129,7 +166,16 @@ int main(int argc, char** argv) {
                       x = sta::gen_delay(static_cast<uint64_t>(&x - base));
                   });
 
-    std::printf("layout,threads,trial,edges_per_sec,gb_per_sec\n");
+    std::printf("layout,strategy,threads,trial,edges_per_sec,gb_per_sec\n");
+
+    // Act 1 first: one thread per work item.
+    for (int t = 0; t < cfg.trials; ++t) {
+        const double nodes_s = run_thread_per_item(arrival_in, delay, out, cfg.layout, 2000);
+        std::printf("%s,thread_per_item,0,%d,%.0f,%.4f\n", layout_name, t,
+                    nodes_s * sta::kFanin, nodes_s * (bytes / n) / 1e9);
+    }
+    std::fflush(stdout);
+    std::fprintf(stderr, "act 1 (thread per item) done\n");
 
     std::vector<int> sweep;
     for (int p = 1; p <= 24; ++p) sweep.push_back(p);
@@ -150,7 +196,7 @@ int main(int argc, char** argv) {
             const double secs = std::chrono::duration<double>(Clock::now() - t0).count();
             const double eps = static_cast<double>(edges) * cfg.reps / secs;
             const double gbs = static_cast<double>(bytes) * cfg.reps / secs / 1e9;
-            std::printf("%s,%d,%d,%.0f,%.2f\n", layout_name, p, t, eps, gbs);
+            std::printf("%s,pool,%d,%d,%.0f,%.2f\n", layout_name, p, t, eps, gbs);
         }
         std::fflush(stdout);
 

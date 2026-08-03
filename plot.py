@@ -4,8 +4,8 @@
 Four figures, in presentation order:
 
   01  STA throughput vs pool size        -- the CPU ceiling is the memory bus
-  02  blocking I/O vs STA, indexed       -- why the CppCon conclusion doesn't
-                                            transfer to compute
+  02  thread-per-item vs thread pool     -- what a pool is actually worth, and
+                                            what it still doesn't buy you
   03  CPU vs GPU, incl. naive offload    -- the GPU bar that's SHORTER than CPU
   04  where the time actually goes       -- PCIe dwarfs the kernel
 
@@ -116,8 +116,9 @@ def save(fig, theme, name):
 # figures
 
 
-def fig_ceiling(theme, rows):
+def fig_ceiling(theme, all_rows):
     """01 -- the CPU ceiling, and that it arrives long before the core count."""
+    rows = [r for r in all_rows if r["strategy"] == "pool"]
     bw = medians(rows, "threads", "gb_per_sec")
     raw = [(float(r["threads"]), float(r["gb_per_sec"])) for r in rows]
     peak = max(bw.values())
@@ -159,69 +160,79 @@ def fig_ceiling(theme, rows):
     return peak, one, peak_n
 
 
-def fig_contrast(theme, sta_rows, io_rows):
-    """02 -- why the talk's conclusion does not transfer to compute."""
-    sta = medians(sta_rows, "threads", "edges_per_sec")
-    io = medians(io_rows, "threads", "throughput")
+def fig_naive_vs_pool(theme, rows):
+    """02 -- act 1 vs act 2: what a thread pool is actually worth."""
+    pool = medians([r for r in rows if r["strategy"] == "pool"], "threads", "gb_per_sec")
+    tpi = statistics.median(
+        [float(r["gb_per_sec"]) for r in rows if r["strategy"] == "thread_per_item"])
+    xs = sorted(pool)
+    peak = max(pool.values())
 
     fig, ax, t = new_fig(theme)
-    for med, color, label in (
-        (io, t["gpu"], "Blocking I/O work (the CppCon benchmark)"),
-        (sta, t["cpu"], "STA propagation (ours)"),
-    ):
-        xs = sorted(med)
-        base = med[xs[0]]
-        ax.plot(xs, [med[x] / base for x in xs], color=color, linewidth=2.2, zorder=3,
-                label=label)
-
-    ax.axvline(PHYSICAL_CORES, color=t["axis"], linewidth=1.0, linestyle=(0, (2, 3)), zorder=2)
-    ax.text(PHYSICAL_CORES, 1.15, f"  {PHYSICAL_CORES} physical cores", color=t["muted"],
-            fontsize=10, rotation=90, va="bottom", ha="left")
+    ax.plot(xs, [pool[x] for x in xs], color=t["cpu"], linewidth=2.2, marker="o",
+            markersize=5, markeredgecolor=t["surface"], markeredgewidth=1.2, zorder=3,
+            label="Thread pool  (std::for_each, par_unseq)")
+    ax.axhline(tpi, color=t["gpu"], linewidth=2.0, linestyle=(0, (6, 4)), zorder=3,
+               label="One std::thread per work item")
 
     ax.set_xscale("log")
     ax.set_yscale("log")
+    ax.set_xticks([1, 2, 4, 8, 16, 32, 64, 128, 256])
     ax.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-    ax.get_yaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}x"))
+    ax.get_yaxis().set_major_formatter(
+        FuncFormatter(lambda v, _: f"{v:g}" if v >= 1 else f"{v:.2f}"))
+    ax.set_ylim(tpi * 0.35, peak * 4.0)
 
-    io_x = sorted(io)
-    io_mark = min(io_x, key=lambda x: abs(x - 150))
-    ax.annotate("threads keep buying throughput,\nbecause each one is BLOCKED\n-> coroutines",
-                xy=(io_mark, io[io_mark] / io[io_x[0]]), xytext=(0.04, 0.80),
-                textcoords="axes fraction", color=t["gpu"], fontsize=12, fontweight="bold",
-                ha="left",
+    ax.axvline(PHYSICAL_CORES, color=t["axis"], linewidth=1.0, linestyle=(0, (2, 3)), zorder=2)
+    ax.text(PHYSICAL_CORES, tpi * 0.45, f"  {PHYSICAL_CORES} physical cores",
+            color=t["muted"], fontsize=10, rotation=90, va="bottom", ha="left")
+
+    # The gap is the whole point of the slide.
+    mid = xs[len(xs) // 2]
+    ax.annotate("", xy=(mid, peak), xytext=(mid, tpi),
+                arrowprops=dict(arrowstyle="<->", color=t["ink2"], linewidth=1.6))
+    ax.text(mid * 1.25, (peak * tpi) ** 0.5, f"{peak / tpi:,.0f}x", color=t["ink"],
+            fontsize=15, fontweight="bold", va="center", ha="left")
+
+    ax.annotate(f"bounded by thread creation:\n~7.5 us to spawn, ~50 ns of work",
+                xy=(xs[2], tpi), xytext=(0.05, 0.16), textcoords="axes fraction",
+                color=t["gpu"], fontsize=12, fontweight="bold", ha="left",
                 arrowprops=dict(arrowstyle="->", color=t["gpu"], linewidth=1.2, shrinkA=0,
                                 shrinkB=8))
-    sta_x = sorted(sta)
-    ax.annotate("flat: every thread is queued\non the same memory bus\n-> more bandwidth",
-                xy=(sta_x[-1], sta[sta_x[-1]] / sta[sta_x[0]]), xytext=(0.52, 0.20),
-                textcoords="axes fraction", color=t["cpu"], fontsize=12, fontweight="bold",
-                ha="left",
+    sat = min(xs, key=lambda v: abs(v - 64))
+    ax.annotate("and it still saturates\nat 6 of 14 cores", xy=(sat, pool[sat]),
+                xytext=(0.52, 0.60), textcoords="axes fraction", color=t["cpu"],
+                fontsize=12, fontweight="bold", ha="left",
                 arrowprops=dict(arrowstyle="->", color=t["cpu"], linewidth=1.2, shrinkA=0,
                                 shrinkB=8))
 
-    leg = ax.legend(loc="lower right", frameon=False, fontsize=11)
+    leg = ax.legend(loc="center left", frameon=False, fontsize=11)
     for txt in leg.get_texts():
         txt.set_color(t["ink2"])
 
     titles(ax, t,
-           "The bottleneck decides the fix",
-           "Speedup over one thread, both workloads indexed onto one axis",
-           "Number of threads (log scale)", "Speedup vs. 1 thread (log scale)")
-    save(fig, theme, "02_io_vs_sta_contrast.png")
+           "A thread pool buys 5,000x. It does not buy you the machine.",
+           "STA propagation. Both axes log. The pool removes thread-creation "
+           "cost, and reveals the memory wall underneath.",
+           "Thread pool size (log scale)", "Achieved memory bandwidth (GB/sec, log scale)")
+    save(fig, theme, "02_naive_vs_pool.png")
 
 
 def fig_cpu_vs_gpu(theme, cpu_peak, cpu_one, cpu_peak_n, gpu_rows):
     """03 -- the punchline: naive offload is SLOWER than the CPU."""
-    kern = next(float(r["gb_per_sec"]) for r in gpu_rows if r["impl"] == "gpu_kernel")
-    xfer = next(float(r["gb_per_sec"]) for r in gpu_rows if r["impl"] == "gpu_with_transfer")
+    by_impl = {r["impl"]: float(r["gb_per_sec"]) for r in gpu_rows}
+    kern = by_impl["gpu_kernel"]
+    xfer = by_impl["gpu_with_transfer"]
     bars = [
         ("1 CPU thread", cpu_one, "cpu"),
         # Not "best at N threads": the plateau is flat, so the argmax wanders
         # run to run. Quote the value, not a spurious thread count.
         ("CPU, best observed", cpu_peak, "cpu"),
         ("GPU, naive offload\n(copy in, run, copy out)", xfer, "gpu"),
-        ("GPU, data resident", kern, "gpu"),
     ]
+    if "gpu_managed" in by_impl:
+        bars.append(("GPU, unified memory\n(no explicit copies)", by_impl["gpu_managed"], "gpu"))
+    bars.append(("GPU, data resident", kern, "gpu"))
 
     fig, ax, t = new_fig(theme, h=5.8)
     ax.grid(True, axis="x", color=t["grid"], linewidth=0.8)
@@ -318,7 +329,6 @@ def fig_breakdown(theme, rows):
 
 def main():
     sta_rows = read_csv("sta_cpu.csv")
-    io_rows = read_csv("threads_io.csv")
     gpu_rows = read_csv("gpu_sta.csv")
     bd_rows = read_csv("gpu_breakdown.csv")
     if not sta_rows:
@@ -330,8 +340,7 @@ def main():
     for theme in ("light", "dark"):
         print(f"{theme}:")
         peak, one, peak_n = fig_ceiling(theme, sta_rows)
-        if io_rows:
-            fig_contrast(theme, sta_rows, io_rows)
+        fig_naive_vs_pool(theme, sta_rows)
         if gpu_rows:
             fig_cpu_vs_gpu(theme, peak, one, peak_n, gpu_rows)
         if bd_rows:

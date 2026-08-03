@@ -1,10 +1,11 @@
 # Why GPU-accelerated STA — the opening experiment
 
 A toy benchmark for the opening of a talk on GPU-accelerated static timing
-analysis. It borrows the *figure layout* from Conor Spilsbury's CppCon 2025
-[*Threads vs. Coroutines*](https://github.com/CppCon/CppCon2025/blob/main/Presentations/Threads_vs_Coroutines.pdf)
-(slides 5, 6, 23) and swaps in the STA propagation kernel, which turns the same
-axes into an argument for parallel hardware instead of coroutines.
+analysis. It builds the case in three acts: one thread per work item, then a
+thread pool, then the GPU — measuring at each step what is actually limiting
+throughput. The figure layout is loosely modelled on the throughput-vs-threads
+plots in Conor Spilsbury's CppCon 2025 *Threads vs. Coroutines*, but the kernel,
+the workload and the conclusion are all different.
 
 Talking points and anticipated audience questions: **[SPEAKER_NOTES.md](SPEAKER_NOTES.md)**.
 
@@ -37,34 +38,60 @@ work item is a 10 ms blocking sleep, so their curve peaks and collapses. Ours is
 
 **Open decisions**
 
-- `02_io_vs_sta_contrast.png` currently frames the contrast as an argument for
-  coroutines. This talk is not about coroutines — the figure should probably be
-  replaced by act 1 vs act 2 (thread-per-item vs pool), which serves the narrative
-  directly. Not yet done.
 - A roofline chart is **not** built. Recommended as a backup slide rather than one
   of the main four: it turns the measurement into a prediction (0.25 flops/byte →
   speedup should equal the bandwidth ratio; 448/49 = 9.1 predicted vs 8.8
   measured), which is useful when re-running on new hardware.
 
-## Porting to H100
+## Porting to H100 and GH200
 
-`make` uses `-arch=native`, so the build needs no change. Four things do:
+`make` uses `-arch=native`, so the build needs no change on either machine. Three
+things do:
 
 1. **Increase `--nodes`.** The kernel is 1.33 ms on an A4000 and would be ~0.2 ms
    on H100 — too short to time cleanly. 80 GB of HBM has room for a much larger
-   graph.
-2. **Expect the gap to narrow.** An H100 host is usually a server CPU with 8–12
-   memory channels doing 200–400 GB/s, not this desktop's ~49. Plan for roughly
-   10–15×, not 68×.
-3. **Act 3 gets stronger, not weaker.** PCIe 5 roughly halves the copy, but the
-   kernel gets ~7× faster, so transfer rises to ~98% of a naive port.
-4. **Check which H100 it is.** On SXM/NVLink or a Grace-Hopper C2C system the
-   transfer story changes qualitatively and act 3 needs reframing, not just
-   re-measuring.
+   graph. Scale until the kernel is at least a few ms.
+2. **Reinstall TBB** (`conda install -c conda-forge tbb-devel`) or point
+   `make TBB_ROOT=...` at it. Without it `std::execution::par` silently runs
+   sequentially; `make tbb-check` will tell you.
+3. **Expect the CPU baseline to rise.** A server host with 8–12 memory channels
+   does 200–400 GB/s, not this desktop's ~49, which narrows the GPU ratio. The
+   *shape* of figures 1 and 2 holds regardless; only the ceiling moves.
 
-Also reinstall TBB on the new machine (`conda install -c conda-forge tbb-devel`)
-or point `make TBB_ROOT=...` at it. Without it `std::execution::par` silently runs
-sequentially — `make tbb-check` will tell you.
+### The two machines tell different halves of the story
+
+Running on both is worth doing, because they disagree about act 3 — and that
+disagreement **is** the argument.
+
+| | this box (PCIe 3/4) | H100 PCIe | GH200 (NVLink-C2C) |
+|---|---:|---:|---:|
+| host→device link | 12.3 GB/s *(measured)* | ~55 GB/s | ~450 GB/s per direction |
+| device memory | 448 GB/s | 3350 GB/s | 3350 GB/s |
+| copy 512 MB in | 43.8 ms | ~9 ms | ~1.1 ms |
+| kernel over 544 MB | 1.33 ms | ~0.16 ms | ~0.16 ms |
+| **transfer share of a naive port** | **97%** | **~98%** | **~88%** |
+
+Two things to take from that row of percentages:
+
+- **On H100 PCIe the problem gets *worse*, not better.** The link roughly
+  quadruples, but the kernel gets ~8× faster, so copying dominates even harder.
+  A faster bus does not rescue a copy-per-call design.
+- **Even C2C's 36× faster link doesn't fully fix it.** GH200 drops the transfer
+  share from ~97% to ~88% — a huge improvement, and still transfer-dominated. The
+  fix was never a faster copy. It is **not copying**: keeping the graph resident,
+  and using coherence so the CPU can touch results without a round trip.
+
+That is what `gpu_managed` in `data/gpu_sta.csv` measures — `cudaMallocManaged`
+with no explicit copies at all. On this PCIe box it lands at **42.6 GB/s**: much
+better than staged copies (11.9) because the driver migrates only what is touched,
+but still just under the CPU, because every page still crosses PCIe on demand. On
+GH200 the same code path runs over a coherent link at ~450 GB/s, and that number
+should move a great deal. **It is the single most interesting number to re-measure
+on the new hardware.**
+
+If the GH200 result lands where the hardware suggests, act 3 stops being "GPUs are
+faster" and becomes "the interconnect was the whole problem, and this is the
+machine built to admit that."
 
 ## The kernel
 
@@ -94,6 +121,7 @@ CUDA 12.6 · gcc 13.3 · TBB 2022
 | CPU, saturated plateau (6+ threads) | ~47–48 | 0.97× |
 | **CPU, best observed** | **48.9** | **1.0×** |
 | GPU, naive offload (copy in, run, copy out) | 11.9 | **0.24×** |
+| GPU, unified memory (no explicit copies) | 42.6 | 0.87× |
 | GPU, data resident | 429.7 | **8.8×** |
 
 Three findings, in the order the figures present them:
@@ -158,7 +186,7 @@ execution::par      3.02 s / 1 thread  0.18 s / 20 threads
 | | |
 |---|---|
 | `01_sta_cpu_ceiling.png` | the CPU ceiling is the memory bus, not the core count |
-| `02_io_vs_sta_contrast.png` | why the CppCon conclusion doesn't transfer to compute |
+| `02_naive_vs_pool.png` | act 1 vs act 2 — a pool buys 5,000× and still can't use half the CPU |
 | `03_cpu_vs_gpu.png` | the GPU bar that is **shorter** than the CPU bar |
 | `04_where_the_time_goes.png` | 97% of a naive port is PCIe |
 

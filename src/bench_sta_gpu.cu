@@ -166,10 +166,47 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "h2d=%.2fms kernel=%.2fms d2h=%.2fms  (PCIe %.1f GB/s)\n", h2d_ms,
                  konly_ms, d2h_ms, (2.0 * edge_bytes) / (h2d_ms / 1e3) / 1e9);
 
+    // ---- 3. unified memory, no explicit copies at all ----------------------
+    // On a PCIe machine this is usually WORSE than staged copies: the driver
+    // migrates pages on demand and you pay fault latency. On GH200, where Grace
+    // and Hopper share a coherent NVLink-C2C link, this is the interesting
+    // path -- the fix for figure 4 is not a faster copy, it is not copying.
+    double managed_eps = 0.0, managed_gbs = 0.0;
+    {
+        float *m_a = nullptr, *m_d = nullptr, *m_out = nullptr;
+        CUDA_CHECK(cudaMallocManaged(&m_a, edge_bytes));
+        CUDA_CHECK(cudaMallocManaged(&m_d, edge_bytes));
+        CUDA_CHECK(cudaMallocManaged(&m_out, out_bytes));
+        for (size_t e = 0; e < edges; ++e) {  // touched on the host, as real input would be
+            m_a[e] = h_a[e];
+            m_d[e] = h_d[e];
+        }
+        const auto m0 = std::chrono::steady_clock::now();
+        const int mreps = 3;
+        for (int i = 0; i < mreps; ++i) {
+            propagate_kernel<<<grid, block>>>(m_a, m_d, m_out, n, layout);
+            CUDA_CHECK(cudaDeviceSynchronize());
+            // Read one element back on the host each pass, so the result really
+            // has to be visible to the CPU -- otherwise nothing migrates back.
+            volatile float sink = m_out[i];
+            (void)sink;
+        }
+        const double msecs =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - m0).count();
+        managed_eps = static_cast<double>(edges) * mreps / msecs;
+        managed_gbs = static_cast<double>(pass_bytes) * mreps / msecs / 1e9;
+        std::fprintf(stderr, "managed (no explicit copies): %.2f GB/s\n", managed_gbs);
+        CUDA_CHECK(cudaFree(m_a));
+        CUDA_CHECK(cudaFree(m_d));
+        CUDA_CHECK(cudaFree(m_out));
+    }
+
     if (FILE* f = std::fopen(out_path.c_str(), "w")) {
         std::fprintf(f, "impl,layout,edges_per_sec,gb_per_sec,checksum_ok\n");
         std::fprintf(f, "gpu_kernel,%s,%.0f,%.2f,%d\n", layout_name, kern_eps, kern_gbs, match);
         std::fprintf(f, "gpu_with_transfer,%s,%.0f,%.2f,%d\n", layout_name, xfer_eps, xfer_gbs,
+                     match);
+        std::fprintf(f, "gpu_managed,%s,%.0f,%.2f,%d\n", layout_name, managed_eps, managed_gbs,
                      match);
         std::fclose(f);
         std::fprintf(stderr, "wrote %s\n", out_path.c_str());
