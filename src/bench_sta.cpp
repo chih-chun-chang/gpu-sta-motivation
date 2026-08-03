@@ -96,6 +96,76 @@ double run_thread_per_item(const std::vector<float>& arrival_in,
     return static_cast<double>(done.load()) / secs;  // nodes/sec
 }
 
+// One complete pass with one std::thread per node -- the honest runtime of act 1
+// at a given problem size, rather than a throughput extrapolation.
+double thread_per_item_pass(const std::vector<float>& arrival_in,
+                            const std::vector<float>& delay, std::vector<float>& out,
+                            sta::Layout layout) {
+    const float* a = arrival_in.data();
+    const float* d = delay.data();
+    float* o = out.data();
+    const size_t n = out.size();
+    std::atomic<long long> live{0};
+
+    const auto t0 = Clock::now();
+    for (size_t i = 0; i < n; ++i) {
+        live.fetch_add(1, std::memory_order_relaxed);
+        std::thread([a, d, o, n, layout, i, &live] {
+            o[i] = sta::propagate(a, d, layout, n, i);
+            live.fetch_sub(1, std::memory_order_relaxed);
+        }).detach();
+    }
+    while (live.load(std::memory_order_relaxed) > 0) std::this_thread::yield();
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
+
+// Runtime against problem size, for each CPU strategy.
+void size_sweep(const Config& cfg, int lo, int hi, size_t max_tpi) {
+    std::printf("strategy,nodes,edges,trial,ms,gb_per_sec\n");
+    const unsigned hw = std::thread::hardware_concurrency();
+
+    for (int lg = lo; lg <= hi; ++lg) {
+        const size_t n = size_t(1) << lg;
+        const size_t edges = n * sta::kFanin;
+        const size_t bytes = sta::bytes_per_pass(n);
+
+        std::vector<float> arrival_in(edges), delay(edges), out(n);
+        std::for_each(std::execution::par_unseq, arrival_in.begin(), arrival_in.end(),
+                      [base = arrival_in.data()](float& x) {
+                          x = sta::gen_arrival(static_cast<uint64_t>(&x - base));
+                      });
+        std::for_each(std::execution::par_unseq, delay.begin(), delay.end(),
+                      [base = delay.data()](float& x) {
+                          x = sta::gen_delay(static_cast<uint64_t>(&x - base));
+                      });
+
+        auto emit = [&](const char* strat, int trial, double ms) {
+            std::printf("%s,%zu,%zu,%d,%.5f,%.3f\n", strat, n, edges, trial, ms,
+                        bytes / (ms / 1e3) / 1e9);
+        };
+        auto timed = [&](const char* strat, size_t parallelism) {
+            tbb::global_control gc(tbb::global_control::max_allowed_parallelism, parallelism);
+            propagate_all(arrival_in, delay, out, cfg.layout);  // warm / fault in
+            for (int t = 0; t < cfg.trials; ++t) {
+                const auto t0 = Clock::now();
+                propagate_all(arrival_in, delay, out, cfg.layout);
+                emit(strat, t, std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+            }
+        };
+
+        timed("single_thread", 1);
+        timed("for_each_par", hw);
+        if (n <= max_tpi) {
+            // One trial only: this strategy is ~5,000x slower and the sweep
+            // would otherwise dominate the run time.
+            emit("thread_per_item", 0, thread_per_item_pass(arrival_in, delay, out, cfg.layout));
+        }
+        std::fflush(stdout);
+        std::fprintf(stderr, "\r  size 2^%d = %zu nodes   ", lg, n);
+    }
+    std::fprintf(stderr, "\ndone\n");
+}
+
 // Confirms whether the parallel policy is really running on more than one
 // thread -- i.e. whether TBB got linked in.
 size_t observed_threads(size_t n) {
@@ -120,6 +190,9 @@ size_t observed_threads(size_t n) {
 
 int main(int argc, char** argv) {
     Config cfg;
+    bool size_sweep_mode = false;
+    int size_lo = 14, size_hi = 24;
+    size_t max_tpi = 1u << 20;  // thread-per-item is ~5,000x slower; cap the sweep
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--nodes") {
@@ -132,6 +205,14 @@ int main(int argc, char** argv) {
             cfg.trials = std::atoi(argv[++i]);
         } else if (a == "--check-parallel") {
             cfg.check_parallel = true;
+        } else if (a == "--size-sweep") {
+            size_sweep_mode = true;
+        } else if (a == "--size-lo") {
+            size_lo = std::atoi(argv[++i]);
+        } else if (a == "--size-hi") {
+            size_hi = std::atoi(argv[++i]);
+        } else if (a == "--max-tpi-nodes") {
+            max_tpi = static_cast<size_t>(std::atof(argv[++i]));
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", a.c_str());
             return 2;
@@ -152,6 +233,13 @@ int main(int argc, char** argv) {
         const size_t seen = observed_threads(1u << 22);
         std::fprintf(stderr, "std::execution::par ran on %zu distinct thread(s) -- %s\n", seen,
                      seen > 1 ? "TBB active" : "SEQUENTIAL FALLBACK, TBB is not linked!");
+    }
+
+    if (size_sweep_mode) {
+        std::fprintf(stderr, "size sweep 2^%d .. 2^%d nodes, thread-per-item capped at %zu\n",
+                     size_lo, size_hi, max_tpi);
+        size_sweep(cfg, size_lo, size_hi, max_tpi);
+        return 0;
     }
 
     // Build the two large vectors.

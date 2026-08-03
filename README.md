@@ -97,9 +97,12 @@ machine built to admit that."
 
 Block-based STA propagates arrival times forward through the timing graph:
 
-```
-arrival[i] = max over fanin k of ( arrival_in[i][k] + delay[i][k] )
-```
+![The STA propagation kernel](figures/00_problem.png)
+
+One work item is one node: take each of its fanin edges, add the edge delay to
+the arrival time coming in, keep the max. That is what a single `std::thread`
+does in act 1, and what a single GPU thread does in act 3 — the same function,
+`sta::propagate`, compiled by both toolchains.
 
 Two large vectors, an elementwise add, a max-reduction over each node's fanin
 window. 8M nodes × 8 fanin = **64M timing edges, 544 MB working set** — 22× this
@@ -181,20 +184,59 @@ execution::par      3.02 s / 1 thread  0.18 s / 20 threads
 
 ## Figures
 
-`figures/` (light) and `figures/dark/`. Present in this order:
+Every figure below regenerates from `data/*.csv`. Dark versions live in
+`figures/dark/`.
 
-| | |
-|---|---|
-| `01_sta_cpu_ceiling.png` | the CPU ceiling is the memory bus, not the core count |
-| `02_naive_vs_pool.png` | act 1 vs act 2 — a pool buys 5,000× and still can't use half the CPU |
-| `03_cpu_vs_gpu.png` | the GPU bar that is **shorter** than the CPU bar |
-| `04_where_the_time_goes.png` | 97% of a naive port is PCIe |
+### 1. The CPU ceiling is the memory bus, not the core count
+
+![CPU ceiling](figures/01_sta_cpu_ceiling.png)
+
+Throughput saturates at 5–6 threads. The other eight cores are queued on the same
+memory controller.
+
+### 2. A thread pool buys 5,000×, and still can't use half the CPU
+
+![Naive vs pool](figures/02_naive_vs_pool.png)
+
+Act 1 against act 2. Deleting the obvious overhead — thread creation — bought four
+decades, and the wall underneath did not move.
+
+### 3. Same kernel, same numbers, bit-for-bit identical results
+
+![CPU vs GPU](figures/03_cpu_vs_gpu.png)
+
+The GPU is 8.8× the whole CPU with data resident. Copy in and out per call and it
+is 4× *slower* than the CPU. Unified memory recovers most of that and still lands
+below the CPU, because every page it touches still crosses PCIe.
+
+### 4. 97% of a naive GPU port is PCIe
+
+![Where the time goes](figures/04_where_the_time_goes.png)
+
+The timing analysis itself is 3% of the wall clock.
+
+### 5. One thread per node never becomes viable
+
+![Runtime vs size, CPU](figures/05_runtime_vs_size_cpu.png)
+
+Runtime against problem size for the three CPU strategies. The thread-per-node
+line is measured up to 1M nodes; beyond that a single pass takes minutes. All
+three lines compute exactly the same arithmetic.
+
+### 6. The copy costs more than the whole CPU does
+
+![Runtime vs size, GPU](figures/06_runtime_vs_size_gpu.png)
+
+The dashed GPU line sits above the CPU line at *every* problem size. The gap
+between the two GPU lines is the copy, and it never closes — it is proportional
+to the data, exactly like the work is.
 
 ## Running it
 
 ```sh
-./run_all.sh      # ~10 min: builds, sweeps, writes data/*.csv
-python3 plot.py   # writes figures/
+./run_all.sh            # ~15 min: builds, sweeps, writes data/*.csv
+python3 plot.py         # figures 01-06
+python3 draw_problem.py # the problem-formulation diagram
 ```
 
 `run_all.sh` sets `ulimit -s 1024` — the blocking-I/O contrast sweep holds 4096
@@ -212,7 +254,8 @@ src/bench_sta_gpu.cu    GPU: kernel, naive offload, transfer breakdown
 src/workload.hpp        compute-bound Mandelbrot reference (roofline contrast)
 src/bench_threads.cpp   throughput vs thread count (--mode io | cpu)
 src/bench_gpu.cu        Mandelbrot on the GPU
-plot.py                 CSVs -> figures
+plot.py                 CSVs -> figures 01-06
+draw_problem.py         the problem-formulation diagram (00)
 ```
 
 There is no hand-written thread pool: the CPU benchmark uses `std::for_each` with

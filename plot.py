@@ -8,6 +8,10 @@ Four figures, in presentation order:
                                             what it still doesn't buy you
   03  CPU vs GPU, incl. naive offload    -- the GPU bar that's SHORTER than CPU
   04  where the time actually goes       -- PCIe dwarfs the kernel
+  05  runtime vs problem size, CPU       -- thread-per-node never catches up
+  06  runtime vs problem size, GPU       -- the copy costs more than the CPU
+
+The problem-formulation diagram (00_problem.png) is drawn by draw_problem.py.
 
 Run after run_all.sh. Light figures to figures/, dark to figures/dark/.
 """
@@ -32,16 +36,24 @@ FIGS = os.path.join(HERE, "figures")
 PHYSICAL_CORES = 14
 LOGICAL_CORES = 20
 
-# Palette slots 1 and 2, validated all-pairs in both modes by the dataviz
-# validator (worst CVD dE 9.2 light / 9.4 dark).
+# Palette slots 1-3, validated all-pairs in both modes by the dataviz validator
+# (worst CVD dE 9.2 light / 9.4 dark).
+#
+# Colour follows the ENTITY, the same in every figure -- never the rank:
+#   cpu    blue   the CPU doing work in parallel (std::for_each)
+#   gpu    orange the GPU, in every figure it appears
+#   naive  aqua   one std::thread per work item, the strawman
+#   muted  gray   single-thread baseline (a reference, not a competitor)
 THEMES = {
     "light": dict(
         surface="#fcfcfb", ink="#0b0b0b", ink2="#52514e", muted="#898781",
-        grid="#e1e0d9", axis="#c3c2b7", cpu="#2a78d6", gpu="#eb6834",
+        grid="#e1e0d9", axis="#c3c2b7",
+        cpu="#2a78d6", gpu="#eb6834", naive="#1baf7a",
     ),
     "dark": dict(
         surface="#1a1a19", ink="#ffffff", ink2="#c3c2b7", muted="#898781",
-        grid="#2c2c2a", axis="#383835", cpu="#3987e5", gpu="#d95926",
+        grid="#2c2c2a", axis="#383835",
+        cpu="#3987e5", gpu="#d95926", naive="#199e70",
     ),
 }
 
@@ -172,7 +184,7 @@ def fig_naive_vs_pool(theme, rows):
     ax.plot(xs, [pool[x] for x in xs], color=t["cpu"], linewidth=2.2, marker="o",
             markersize=5, markeredgecolor=t["surface"], markeredgewidth=1.2, zorder=3,
             label="Thread pool  (std::for_each, par_unseq)")
-    ax.axhline(tpi, color=t["gpu"], linewidth=2.0, linestyle=(0, (6, 4)), zorder=3,
+    ax.axhline(tpi, color=t["naive"], linewidth=2.0, linestyle=(0, (6, 4)), zorder=3,
                label="One std::thread per work item")
 
     ax.set_xscale("log")
@@ -196,8 +208,8 @@ def fig_naive_vs_pool(theme, rows):
 
     ax.annotate(f"bounded by thread creation:\n~7.5 us to spawn, ~50 ns of work",
                 xy=(xs[2], tpi), xytext=(0.05, 0.16), textcoords="axes fraction",
-                color=t["gpu"], fontsize=12, fontweight="bold", ha="left",
-                arrowprops=dict(arrowstyle="->", color=t["gpu"], linewidth=1.2, shrinkA=0,
+                color=t["naive"], fontsize=12, fontweight="bold", ha="left",
+                arrowprops=dict(arrowstyle="->", color=t["naive"], linewidth=1.2, shrinkA=0,
                                 shrinkB=8))
     sat = min(xs, key=lambda v: abs(v - 64))
     ax.annotate("and it still saturates\nat 6 of 14 cores", xy=(sat, pool[sat]),
@@ -324,6 +336,72 @@ def fig_breakdown(theme, rows):
     save(fig, theme, "04_where_the_time_goes.png")
 
 
+def fig_runtime_vs_size(theme, cpu_rows, gpu_rows):
+    """05/06 -- runtime against problem size."""
+    def series(rows, strat):
+        sel = [r for r in rows if r["strategy"] == strat]
+        return medians(sel, "nodes", "ms") if sel else {}
+
+    tpi = series(cpu_rows, "thread_per_item")
+    one = series(cpu_rows, "single_thread")
+    par = series(cpu_rows, "for_each_par")
+    kern = series(gpu_rows, "gpu_kernel") if gpu_rows else {}
+    xfer = series(gpu_rows, "gpu_with_transfer") if gpu_rows else {}
+
+    # L3 is 24 MB on this machine; mark where the working set outgrows it.
+    l3_nodes = 24 * 1024 * 1024 / (sta_bytes_per_node())
+
+    def plot(specs, title, subtitle, name, note=None):
+        fig, ax, t = new_fig(theme)
+        for med, color, style, label in specs:
+            if not med:
+                continue
+            xs = sorted(med)
+            ax.plot(xs, [med[x] for x in xs], color=color, linewidth=2.2, linestyle=style,
+                    marker="o", markersize=5, markeredgecolor=t["surface"],
+                    markeredgewidth=1.2, zorder=3, label=label)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: si(v)))
+        ax.get_yaxis().set_major_formatter(
+            FuncFormatter(lambda v, _: f"{v:g} ms" if v >= 1 else f"{v:g}"))
+        ax.axvline(l3_nodes, color=t["axis"], linewidth=1.0, linestyle=(0, (2, 3)), zorder=2)
+        ax.text(l3_nodes, ax.get_ylim()[0] * 1.6, "  working set outgrows L3",
+                color=t["muted"], fontsize=10, rotation=90, va="bottom", ha="left")
+        if note:
+            ax.text(0.03, 0.62, note, transform=ax.transAxes, color=t["ink2"], fontsize=11,
+                    va="top", ha="left")
+        leg = ax.legend(loc="upper left", frameon=False, fontsize=11,
+                        bbox_to_anchor=(0.03, 0.53) if note else (0.02, 0.98))
+        for txt in leg.get_texts():
+            txt.set_color(t["ink2"])
+        titles(ax, t, title, subtitle, "Problem size (nodes, log scale)",
+               "Runtime for one full pass (log scale)")
+        save(fig, theme, name)
+
+    plot([(tpi, THEMES[theme]["naive"], "-", "One std::thread per node"),
+          (one, THEMES[theme]["muted"], (0, (5, 3)), "Single thread (reference)"),
+          (par, THEMES[theme]["cpu"], "-", "std::for_each(par_unseq)")],
+         "One thread per node never becomes viable",
+         "One full STA propagation pass. Both axes log. All three lines are the "
+         "same arithmetic.",
+         "05_runtime_vs_size_cpu.png",
+         note="thread-per-node stops at 1M nodes:\nbeyond that a single pass takes minutes")
+
+    plot([(par, THEMES[theme]["cpu"], "-", "CPU: std::for_each(par_unseq)"),
+          (xfer, THEMES[theme]["gpu"], (0, (5, 3)), "GPU: with copy in + copy out"),
+          (kern, THEMES[theme]["gpu"], "-", "GPU: data already resident")],
+         "The copy costs more than the whole CPU does",
+         "One full STA propagation pass. The dashed GPU line sits ABOVE the CPU "
+         "line at every size.",
+         "06_runtime_vs_size_gpu.png")
+
+
+def sta_bytes_per_node():
+    # kFanin(8) * 2 loads * 4 bytes + 1 store * 4 bytes -- mirrors sta::bytes_per_pass.
+    return 8 * 2 * 4 + 4
+
+
 # --------------------------------------------------------------------------
 
 
@@ -331,6 +409,8 @@ def main():
     sta_rows = read_csv("sta_cpu.csv")
     gpu_rows = read_csv("gpu_sta.csv")
     bd_rows = read_csv("gpu_breakdown.csv")
+    size_cpu = read_csv("size_cpu.csv")
+    size_gpu = read_csv("size_gpu.csv")
     if not sta_rows:
         sys.exit("data/sta_cpu.csv missing -- run ./run_all.sh first")
     if gpu_rows and not all(r["checksum_ok"] == "1" for r in gpu_rows):
@@ -345,6 +425,8 @@ def main():
             fig_cpu_vs_gpu(theme, peak, one, peak_n, gpu_rows)
         if bd_rows:
             fig_breakdown(theme, bd_rows)
+        if size_cpu:
+            fig_runtime_vs_size(theme, size_cpu, size_gpu)
 
 
 if __name__ == "__main__":

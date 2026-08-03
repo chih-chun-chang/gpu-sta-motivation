@@ -49,12 +49,97 @@ __global__ void gen_kernel(float* a, float* d, size_t edges) {
     d[e] = sta::gen_delay(e);
 }
 
+// Runtime against problem size: kernel alone, and kernel plus the copies.
+// Writes its own CSV and returns.
+static int run_size_sweep(int lo, int hi, int trials, sta::Layout layout,
+                          const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) {
+        std::fprintf(stderr, "cannot write %s\n", path.c_str());
+        return 1;
+    }
+    std::fprintf(f, "strategy,nodes,edges,trial,ms,gb_per_sec\n");
+
+    for (int lg = lo; lg <= hi; ++lg) {
+        const size_t n = size_t(1) << lg;
+        const size_t edges = n * sta::kFanin;
+        const size_t edge_bytes = edges * sizeof(float);
+        const size_t out_bytes = n * sizeof(float);
+        const size_t pass_bytes = sta::bytes_per_pass(n);
+        const int block = 256;
+        const int grid = static_cast<int>((n + block - 1) / block);
+
+        float *d_a, *d_d, *d_out, *p_a, *p_d, *p_out;
+        CUDA_CHECK(cudaMalloc(&d_a, edge_bytes));
+        CUDA_CHECK(cudaMalloc(&d_d, edge_bytes));
+        CUDA_CHECK(cudaMalloc(&d_out, out_bytes));
+        CUDA_CHECK(cudaHostAlloc(&p_a, edge_bytes, cudaHostAllocDefault));
+        CUDA_CHECK(cudaHostAlloc(&p_d, edge_bytes, cudaHostAllocDefault));
+        CUDA_CHECK(cudaHostAlloc(&p_out, out_bytes, cudaHostAllocDefault));
+        gen_kernel<<<static_cast<int>((edges + block - 1) / block), block>>>(d_a, d_d, edges);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        auto emit = [&](const char* s, int t, double ms) {
+            std::fprintf(f, "%s,%zu,%zu,%d,%.5f,%.3f\n", s, n, edges, t, ms,
+                         pass_bytes / (ms / 1e3) / 1e9);
+        };
+
+        // Kernel only, data already resident.
+        cudaEvent_t e0, e1;
+        CUDA_CHECK(cudaEventCreate(&e0));
+        CUDA_CHECK(cudaEventCreate(&e1));
+        for (int w = 0; w < 3; ++w) propagate_kernel<<<grid, block>>>(d_a, d_d, d_out, n, layout);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        for (int t = 0; t < trials; ++t) {
+            const int inner = 10;
+            CUDA_CHECK(cudaEventRecord(e0));
+            for (int r = 0; r < inner; ++r)
+                propagate_kernel<<<grid, block>>>(d_a, d_d, d_out, n, layout);
+            CUDA_CHECK(cudaEventRecord(e1));
+            CUDA_CHECK(cudaEventSynchronize(e1));
+            float ms = 0.0f;
+            CUDA_CHECK(cudaEventElapsedTime(&ms, e0, e1));
+            emit("gpu_kernel", t, ms / inner);
+        }
+
+        // Kernel plus copy in and copy out.
+        for (int t = 0; t < trials + 1; ++t) {
+            const auto t0 = std::chrono::steady_clock::now();
+            CUDA_CHECK(cudaMemcpy(d_a, p_a, edge_bytes, cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(d_d, p_d, edge_bytes, cudaMemcpyHostToDevice));
+            propagate_kernel<<<grid, block>>>(d_a, d_d, d_out, n, layout);
+            CUDA_CHECK(cudaDeviceSynchronize());
+            CUDA_CHECK(cudaMemcpy(p_out, d_out, out_bytes, cudaMemcpyDeviceToHost));
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                    .count();
+            if (t > 0) emit("gpu_with_transfer", t - 1, ms);  // discard the first
+        }
+
+        CUDA_CHECK(cudaEventDestroy(e0));
+        CUDA_CHECK(cudaEventDestroy(e1));
+        CUDA_CHECK(cudaFreeHost(p_a));
+        CUDA_CHECK(cudaFreeHost(p_d));
+        CUDA_CHECK(cudaFreeHost(p_out));
+        CUDA_CHECK(cudaFree(d_a));
+        CUDA_CHECK(cudaFree(d_d));
+        CUDA_CHECK(cudaFree(d_out));
+        std::fprintf(stderr, "\r  size 2^%d = %zu nodes   ", lg, n);
+    }
+    std::fclose(f);
+    std::fprintf(stderr, "\nwrote %s\n", path.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     size_t nodes = 8u << 20;
     int reps = 20;
     sta::Layout layout = sta::Layout::Soa;
     std::string out_path = "data/gpu_sta.csv";
     std::string breakdown_path = "data/gpu_breakdown.csv";
+    bool size_sweep_mode = false;
+    int size_lo = 14, size_hi = 24, size_trials = 3;
+    std::string size_path = "data/size_gpu.csv";
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -63,8 +148,14 @@ int main(int argc, char** argv) {
         else if (a == "--layout") layout = (std::string(argv[++i]) == "aos") ? sta::Layout::Aos : sta::Layout::Soa;
         else if (a == "--out") out_path = argv[++i];
         else if (a == "--breakdown-out") breakdown_path = argv[++i];
+        else if (a == "--size-sweep") size_sweep_mode = true;
+        else if (a == "--size-lo") size_lo = std::atoi(argv[++i]);
+        else if (a == "--size-hi") size_hi = std::atoi(argv[++i]);
+        else if (a == "--size-out") size_path = argv[++i];
         else { std::fprintf(stderr, "unknown argument: %s\n", a.c_str()); return 2; }
     }
+
+    if (size_sweep_mode) return run_size_sweep(size_lo, size_hi, size_trials, layout, size_path);
 
     const size_t n = nodes;
     const size_t edges = n * sta::kFanin;
