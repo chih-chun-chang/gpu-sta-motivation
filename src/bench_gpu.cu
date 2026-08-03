@@ -69,8 +69,14 @@ int main(int argc, char** argv) {
 
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    // cudaDeviceProp::clockRate was removed in CUDA 13; the device attribute
+    // works across 11, 12 and 13. Display only, so 0 is tolerable.
+    int clock_khz = 0;
+    if (cudaDeviceGetAttribute(&clock_khz, cudaDevAttrClockRate, 0) != cudaSuccess) {
+        cudaGetLastError();
+    }
     std::fprintf(stderr, "gpu=%s sms=%d clock=%.2fGHz iters=%d\n", prop.name,
-                 prop.multiProcessorCount, prop.clockRate / 1e6, iters);
+                 prop.multiProcessorCount, clock_khz / 1e6, iters);
 
     // ---- CPU reference: one thread, one full image ----------------------
     std::vector<uint16_t> cpu_img(pixels);

@@ -43,6 +43,7 @@ struct Config {
     int reps = 5;
     int trials = 3;
     bool check_parallel = false;
+    bool allow_sequential = false;
 };
 
 // One propagation pass over the whole graph.
@@ -205,6 +206,8 @@ int main(int argc, char** argv) {
             cfg.trials = std::atoi(argv[++i]);
         } else if (a == "--check-parallel") {
             cfg.check_parallel = true;
+        } else if (a == "--allow-sequential") {
+            cfg.allow_sequential = true;
         } else if (a == "--size-sweep") {
             size_sweep_mode = true;
         } else if (a == "--size-lo") {
@@ -229,10 +232,37 @@ int main(int argc, char** argv) {
                  n, sta::kFanin, edges, bytes / 1048576.0, layout_name,
                  std::thread::hardware_concurrency());
 
-    if (cfg.check_parallel) {
-        const size_t seen = observed_threads(1u << 22);
-        std::fprintf(stderr, "std::execution::par ran on %zu distinct thread(s) -- %s\n", seen,
-                     seen > 1 ? "TBB active" : "SEQUENTIAL FALLBACK, TBB is not linked!");
+    // ALWAYS verify the parallel policy is really parallel, and refuse to
+    // produce numbers if it is not.
+    //
+    // Missing TBB headers or library both fail loudly at build time, because
+    // this file uses tbb::global_control directly. The case that does not is a
+    // libstdc++ built without TBB support: everything links, everything runs,
+    // and every CPU result is silently a single-threaded result. That would
+    // make act 2 look like act 1 and the whole comparison would be wrong, so
+    // it is a hard error rather than a warning.
+    {
+        const size_t seen = observed_threads(1u << 21);
+        const unsigned hw = std::thread::hardware_concurrency();
+        if (cfg.check_parallel) {
+            std::fprintf(stderr, "std::execution::par ran on %zu distinct thread(s) -- %s\n",
+                         seen, seen > 1 ? "TBB active" : "SEQUENTIAL FALLBACK");
+        }
+        if (seen <= 1 && hw > 1 && !cfg.allow_sequential) {
+            std::fprintf(stderr,
+                         "\nFATAL: std::execution::par is running SEQUENTIALLY on a machine\n"
+                         "with %u hardware threads. libstdc++ implements the parallel\n"
+                         "policies on Intel TBB and silently degrades to serial without it,\n"
+                         "so every CPU number this would print would be wrong.\n\n"
+                         "  check what the build resolved:  make tbb-info\n"
+                         "  install it:                     conda install -c conda-forge tbb-devel\n"
+                         "                                  sudo apt install libtbb-dev\n"
+                         "                                  sudo dnf install tbb-devel\n"
+                         "  then point the build at it:     make TBB_ROOT=$CONDA_PREFIX\n\n"
+                         "Pass --allow-sequential to measure the serial fallback on purpose.\n",
+                         hw);
+            return 3;
+        }
     }
 
     if (size_sweep_mode) {

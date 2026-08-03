@@ -51,12 +51,37 @@ things do:
 1. **Increase `--nodes`.** The kernel is 1.33 ms on an A4000 and would be ~0.2 ms
    on H100 — too short to time cleanly. 80 GB of HBM has room for a much larger
    graph. Scale until the kernel is at least a few ms.
-2. **Reinstall TBB** (`conda install -c conda-forge tbb-devel`) or point
-   `make TBB_ROOT=...` at it. Without it `std::execution::par` silently runs
-   sequentially; `make tbb-check` will tell you.
+2. **Reinstall TBB** (`conda install -c conda-forge tbb-devel`, `apt install
+   libtbb-dev`, `dnf install tbb-devel`) and point the build at it if it is not on
+   the default paths. `TBB_ROOT` is a **prefix** — the build looks for
+   `$TBB_ROOT/include` and then `lib64` / `lib/<triplet>` / `lib` beneath it,
+   because distributions disagree. `make tbb-info` prints what got resolved;
+   `TBB_INC` and `TBB_LIB` override it directly.
+
+   `bench_sta` now **aborts** if `std::execution::par` turns out to be running
+   serially, rather than printing plausible but single-threaded numbers. Missing
+   headers or library fail at build time anyway; the case this catches is a
+   libstdc++ compiled without TBB support, where everything links and runs and is
+   quietly wrong.
 3. **Expect the CPU baseline to rise.** A server host with 8–12 memory channels
    does 200–400 GB/s, not this desktop's ~49, which narrows the GPU ratio. The
    *shape* of figures 1 and 2 holds regardless; only the ceiling moves.
+
+### CUDA 13 and Grace (aarch64)
+
+`cudaDeviceProp::clockRate` and `::memoryClockRate` were deprecated in CUDA 12 and
+**removed in CUDA 13**, so unmodified source that compiles against 12.x fails on a
+CUDA 13 toolkit. Both call sites now use `cudaDeviceGetAttribute`
+(`cudaDevAttrClockRate`, `cudaDevAttrMemoryClockRate`,
+`cudaDevAttrGlobalMemoryBusWidth`), which is valid on 11, 12 and 13 alike. Those
+values are display-only, so they degrade to "not reported" instead of aborting.
+
+Building with an older toolkit and running on a newer driver would also work — the
+driver is backward compatible and nvcc links the runtime statically by default —
+but it does not help here: Grace is aarch64, so you have to build on the GH200
+regardless, and `-arch=native` on an x86 box would emit sm_86 rather than sm_90.
+Keeping one source that builds on both machines is also one less confound when
+comparing their numbers.
 
 ### The two machines tell different halves of the story
 

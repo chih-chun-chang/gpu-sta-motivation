@@ -4,12 +4,38 @@ NVCC      ?= nvcc
 # this builds unchanged when moving machines. Override for cross-compiling.
 CUDA_ARCH ?= native
 
-# TBB backs libstdc++'s parallel algorithms. Installed without sudo via
-#   conda install -c conda-forge tbb-devel
-# WITHOUT it, std::execution::par silently runs SEQUENTIALLY. Override
-# TBB_ROOT if yours lives elsewhere.
+# TBB backs libstdc++'s parallel algorithms. Without it std::execution::par
+# silently runs SEQUENTIALLY, which would make every CPU number in this repo
+# wrong. Install it one of these ways:
+#
+#   conda install -c conda-forge tbb-devel      then TBB_ROOT=$(CONDA_PREFIX)
+#   sudo apt install libtbb-dev                 (lands on the default paths)
+#   sudo dnf install tbb-devel                  (lands on the default paths)
+#   module load tbb  /  oneAPI                  then TBB_ROOT=/opt/intel/oneapi/tbb/latest
+#
+# TBB_ROOT is a PREFIX, not an include or a lib directory: the build looks for
+# $(TBB_ROOT)/include and then for lib64 / lib/<triplet> / lib beneath it,
+# because distributions disagree about which one to use. Override TBB_INC and
+# TBB_LIB directly if your install has a different shape. `make tbb-info`
+# prints what got resolved.
+comma := ,
 TBB_ROOT ?= $(HOME)/miniconda3
-TBB_FLAGS := -I$(TBB_ROOT)/include -L$(TBB_ROOT)/lib -Wl,-rpath,$(TBB_ROOT)/lib -ltbb
+TBB_INC  ?= $(TBB_ROOT)/include
+TBB_LIB  ?= $(firstword $(wildcard $(TBB_ROOT)/lib64 \
+                                   $(TBB_ROOT)/lib/x86_64-linux-gnu \
+                                   $(TBB_ROOT)/lib/aarch64-linux-gnu \
+                                   $(TBB_ROOT)/lib))
+
+TBB_HDR := $(wildcard $(TBB_INC)/oneapi/tbb/global_control.h)
+ifeq ($(TBB_HDR),)
+  # Not under TBB_ROOT. Assume a system install already on the default search
+  # paths; if it isn't there either, the compile fails loudly, which is what
+  # we want -- see the `tbb-info` target.
+  TBB_FLAGS := -ltbb
+else
+  TBB_FLAGS := -I$(TBB_INC) \
+               $(if $(TBB_LIB),-L$(TBB_LIB) -Wl$(comma)-rpath$(comma)$(TBB_LIB)) -ltbb
+endif
 
 # -ffp-contract=off / --fmad=false keep host and device float rounding identical,
 # so the CPU and GPU checksums can be compared exactly.
@@ -23,7 +49,7 @@ BIN := bin
 STA_TARGETS  := $(BIN)/bench_sta $(BIN)/bench_sta_gpu
 REF_TARGETS  := $(BIN)/bench_threads $(BIN)/bench_gpu
 
-.PHONY: all sta ref clean tbb-check
+.PHONY: all sta ref clean tbb-check tbb-info
 all: sta ref
 sta: $(STA_TARGETS)
 ref: $(REF_TARGETS)
@@ -43,7 +69,21 @@ $(BIN)/bench_threads: src/bench_threads.cpp src/workload.hpp | $(BIN)
 $(BIN)/bench_gpu: src/bench_gpu.cu src/workload.hpp | $(BIN)
 	$(NVCC) $(NVCCFLAGS) -o $@ $<
 
+# Shows which TBB the build resolved. Run this first when moving machines.
+tbb-info:
+	@echo "TBB_ROOT  = $(TBB_ROOT)"
+	@echo "TBB_INC   = $(TBB_INC)"
+	@echo "  header  = $(if $(TBB_HDR),FOUND,not found -- falling back to system paths)"
+	@echo "TBB_LIB   = $(if $(TBB_LIB),$(TBB_LIB),<none> -- using default linker paths)"
+	@echo "TBB_FLAGS = $(TBB_FLAGS)"
+	@echo
+	@echo "If the header is not found and the build fails, pass a prefix, e.g."
+	@echo "  make TBB_ROOT=\$$CONDA_PREFIX"
+	@echo "  make TBB_ROOT=/opt/intel/oneapi/tbb/latest"
+	@echo "  make TBB_INC=/usr/include TBB_LIB=/usr/lib64"
+
 # Confirms std::execution::par is really parallel and not the silent fallback.
+# bench_sta aborts on its own if it is sequential, so this failing is fatal.
 tbb-check: $(BIN)/bench_sta
 	./$(BIN)/bench_sta --nodes 1e6 --trials 1 --reps 1 --check-parallel 2>&1 | head -3
 

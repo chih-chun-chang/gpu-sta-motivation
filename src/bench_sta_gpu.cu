@@ -35,6 +35,31 @@
         }                                                                       \
     } while (0)
 
+// cudaDeviceProp::clockRate and ::memoryClockRate were deprecated in CUDA 12 and
+// REMOVED in CUDA 13, so reading them straight off the struct fails to compile
+// on a current toolkit (e.g. GH200 with CUDA 13.x). cudaDeviceGetAttribute
+// carries the same information and works on 11, 12 and 13 alike.
+//
+// Display only: if the driver declines to answer we report 0 and carry on,
+// because nothing we measure depends on it.
+static int device_attr(cudaDeviceAttr attr, int device) {
+    int v = 0;
+    if (cudaDeviceGetAttribute(&v, attr, device) != cudaSuccess) {
+        cudaGetLastError();  // clear the sticky error so later checks stay honest
+        return 0;
+    }
+    return v;
+}
+
+// Theoretical peak, from memory clock and bus width. DDR moves two words per
+// clock, hence the factor of two. Returns 0 when unavailable.
+static double peak_bandwidth_gbs(int device) {
+    const int mem_khz = device_attr(cudaDevAttrMemoryClockRate, device);
+    const int bus_bits = device_attr(cudaDevAttrGlobalMemoryBusWidth, device);
+    if (mem_khz <= 0 || bus_bits <= 0) return 0.0;
+    return 2.0 * mem_khz * 1e3 * (bus_bits / 8.0) / 1e9;
+}
+
 __global__ void propagate_kernel(const float* __restrict a, const float* __restrict d,
                                  float* __restrict out, size_t n, sta::Layout layout) {
     const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -166,10 +191,15 @@ int main(int argc, char** argv) {
 
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-    const double peak_bw =
-        2.0 * prop.memoryClockRate * 1e3 * (prop.memoryBusWidth / 8) / 1e9;
-    std::fprintf(stderr, "gpu=%s sms=%d bus=%d-bit peak_bw=%.0f GB/s\n", prop.name,
-                 prop.multiProcessorCount, prop.memoryBusWidth, peak_bw);
+    const double peak_bw = peak_bandwidth_gbs(0);
+    const int bus_bits = device_attr(cudaDevAttrGlobalMemoryBusWidth, 0);
+    if (peak_bw > 0.0) {
+        std::fprintf(stderr, "gpu=%s sms=%d bus=%d-bit peak_bw=%.0f GB/s\n", prop.name,
+                     prop.multiProcessorCount, bus_bits, peak_bw);
+    } else {
+        std::fprintf(stderr, "gpu=%s sms=%d (peak bandwidth not reported by the driver)\n",
+                     prop.name, prop.multiProcessorCount);
+    }
     std::fprintf(stderr, "nodes=%zu edges=%zu working_set=%.0f MB layout=%s reps=%d\n", n,
                  edges, pass_bytes / 1048576.0, layout_name, reps);
 
