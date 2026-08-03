@@ -1,0 +1,4 @@
+impl,throughput,checksum_ok
+cpu_1core,10141.9,1
+gpu_compute,10739120.4,1
+gpu_with_transfer,2787041.0,1

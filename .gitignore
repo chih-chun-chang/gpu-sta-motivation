@@ -1,0 +1,3 @@
+bin/
+*.o
+__pycache__/

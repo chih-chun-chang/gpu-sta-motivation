@@ -1,0 +1,3 @@
+impl,layout,edges_per_sec,gb_per_sec,checksum_ok
+gpu_kernel,soa,50558151751,429.74,1
+gpu_with_transfer,soa,1399628760,11.90,1
