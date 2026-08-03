@@ -88,35 +88,64 @@ comparing their numbers.
 Running on both is worth doing, because they disagree about act 3 — and that
 disagreement **is** the argument.
 
-| | this box (PCIe 3/4) | H100 PCIe | GH200 (NVLink-C2C) |
-|---|---:|---:|---:|
-| host→device link | 12.3 GB/s *(measured)* | ~55 GB/s | ~450 GB/s per direction |
-| device memory | 448 GB/s | 3350 GB/s | 3350 GB/s |
-| copy 512 MB in | 43.8 ms | ~9 ms | ~1.1 ms |
-| kernel over 544 MB | 1.33 ms | ~0.16 ms | ~0.16 ms |
-| **transfer share of a naive port** | **97%** | **~98%** | **~88%** |
+| | this box (PCIe) | GH200 (NVLink-C2C) |
+|---|---:|---:|
+| host→device link | 12.3 GB/s | **126.6 GB/s** |
+| device→host link | 12.0 GB/s | **64.5 GB/s** |
+| device memory peak | 448 GB/s | **4023 GB/s** |
+| kernel, resident | 1.33 ms (430 GB/s, 96% of peak) | **0.20 ms (2852 GB/s, 71% of peak)** |
+| copy in / copy out | 43.8 / 2.8 ms | **4.24 / 0.52 ms** |
+| **transfer share of a naive port** | **97%** | **96%** |
 
-Two things to take from that row of percentages:
+Both columns are measured, not projected. The GH200 figures are 8.4M nodes
+(537 MB in, 33.5 MB out, 570 MB touched per pass).
 
-- **On H100 PCIe the problem gets *worse*, not better.** The link roughly
-  quadruples, but the kernel gets ~8× faster, so copying dominates even harder.
-  A faster bus does not rescue a copy-per-call design.
-- **Even C2C's 36× faster link doesn't fully fix it.** GH200 drops the transfer
-  share from ~97% to ~88% — a huge improvement, and still transfer-dominated. The
-  fix was never a faster copy. It is **not copying**: keeping the graph resident,
-  and using coherence so the CPU can touch results without a round trip.
+**The transfer share did not move.** The link got 10× faster and the kernel got
+6.6× faster, so the ratio stayed where it was. This is the cleanest statement of
+the thesis available: you cannot buy your way out of this with a faster
+interconnect, because the interconnect and the compute scale together. An earlier
+version of this file predicted ~88% for GH200 from the 450 GB/s C2C spec figure;
+the measured single-stream rate is 126.6 GB/s, so the prediction was optimistic
+and the real answer is starker.
 
-That is what `gpu_managed` in `data/gpu_sta.csv` measures — `cudaMallocManaged`
-with no explicit copies at all. On this PCIe box it lands at **42.6 GB/s**: much
-better than staged copies (11.9) because the driver migrates only what is touched,
-but still just under the CPU, because every page still crosses PCIe on demand. On
-GH200 the same code path runs over a coherent link at ~450 GB/s, and that number
-should move a great deal. **It is the single most interesting number to re-measure
-on the new hardware.**
+Two smaller observations from the GH200 run, both worth a sentence if asked:
 
-If the GH200 result lands where the hardware suggests, act 3 stops being "GPUs are
-faster" and becomes "the interconnect was the whole problem, and this is the
-machine built to admit that."
+- **D2H runs at half the H2D rate** (64.5 vs 126.6 GB/s). Partly the smaller
+  transfer (33.5 MB) not amortising ramp-up.
+- **The kernel reaches 71% of peak bandwidth, against 96% on the A4000.** More
+  headroom to chase on HBM3e, and not a criticism of the card — 2852 GB/s is
+  still 6.6× the A4000's absolute throughput.
+- **A single `cudaMemcpy` uses one copy engine.** 126.6 GB/s is roughly 28% of the
+  450 GB/s per-direction C2C spec; saturating it generally needs several
+  concurrent streams. Worth checking with NVIDIA's `nvbandwidth` before quoting
+  126.6 as the machine's ceiling rather than this benchmark's.
+
+### Unified memory got *worse* on GH200, and that is the interesting part
+
+`gpu_managed` measures `cudaMallocManaged` with no explicit copies at all — the
+"just let the hardware deal with it" path, which coherent NVLink-C2C is supposed
+to make good.
+
+| | this box (PCIe) | GH200 (C2C) |
+|---|---:|---:|
+| naive staged copies | 11.9 GB/s | 115 GB/s |
+| **unified memory, no copies** | **42.6 GB/s** | **21.9 GB/s** |
+| resident, no copies at all | 429.7 GB/s | 2852 GB/s |
+
+On the PCIe box unified memory *beat* staged copies 3.6×, because the driver only
+moves what is touched. On GH200 it is **5.3× slower than the staged copy** — 26 ms
+against 4.96 ms — despite a link that is 10× faster and cache-coherent.
+
+The likely cause is fault-driven migration rather than direct coherent access: the
+benchmark's host-side read of the result each pass is enough to start pages moving
+back and forth. A real implementation would pin the placement with
+`cudaMemAdvise(cudaMemAdviseSetPreferredLocation / SetReadMostly)` and
+`cudaMemPrefetchAsync`. **This benchmark does not yet do that, so treat 21.9 GB/s
+as the cost of naive unified memory, not as what GH200 can do.**
+
+Which is arguably the better slide anyway: the hardware made the link ten times
+faster and coherent, and the naive code got *slower*. The problem was never the
+link. It is that somebody has to decide where the data lives.
 
 ## The kernel
 
