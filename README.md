@@ -198,8 +198,10 @@ memory controller.
 
 ![Naive vs pool](figures/02_naive_vs_pool.png)
 
-Act 1 against act 2. Deleting the obvious overhead — thread creation — bought four
-decades, and the wall underneath did not move.
+Act 1 against act 2, with the GPU's bandwidth on the same axis for scale. Deleting
+the obvious overhead — thread creation — bought four decades, and the wall
+underneath did not move. There is still 8.8× above it that no amount of CPU
+threading reaches.
 
 ### 3. Same kernel, same numbers, bit-for-bit identical results
 
@@ -223,13 +225,20 @@ Runtime against problem size for the three CPU strategies. The thread-per-node
 line is measured up to 1M nodes; beyond that a single pass takes minutes. All
 three lines compute exactly the same arithmetic.
 
+The speedup arrow is anchored at the **largest** problem size on purpose. The raw
+maximum ratio is higher (16,180× at 16k nodes), but that is an artefact of the
+pool's working set fitting in cache at small sizes — quoting it would overstate
+the result.
+
 ### 6. The copy costs more than the whole CPU does
 
 ![Runtime vs size, GPU](figures/06_runtime_vs_size_gpu.png)
 
 The dashed GPU line sits above the CPU line at *every* problem size. The gap
 between the two GPU lines is the copy, and it never closes — it is proportional
-to the data, exactly like the work is.
+to the data, exactly like the work is. Arrows anchored at the largest size for the
+same reason as figure 5 (the ratio peaks at small sizes where CPU dispatch
+overhead dominates, which would overstate it).
 
 ## Running it
 

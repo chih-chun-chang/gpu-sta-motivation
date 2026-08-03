@@ -172,7 +172,15 @@ def fig_ceiling(theme, all_rows):
     return peak, one, peak_n
 
 
-def fig_naive_vs_pool(theme, rows):
+def gap_arrow(ax, t, x, lo, hi, label, color=None, dx=1.18, fontsize=15):
+    """A double-headed arrow between two y values at x, labelled with the ratio."""
+    ax.annotate("", xy=(x, hi), xytext=(x, lo),
+                arrowprops=dict(arrowstyle="<->", color=color or t["ink2"], linewidth=1.6))
+    ax.text(x * dx, (lo * hi) ** 0.5, label, color=color or t["ink"], fontsize=fontsize,
+            fontweight="bold", va="center", ha="left")
+
+
+def fig_naive_vs_pool(theme, rows, gpu_bw=None):
     """02 -- act 1 vs act 2: what a thread pool is actually worth."""
     pool = medians([r for r in rows if r["strategy"] == "pool"], "threads", "gb_per_sec")
     tpi = statistics.median(
@@ -193,7 +201,13 @@ def fig_naive_vs_pool(theme, rows):
     ax.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     ax.get_yaxis().set_major_formatter(
         FuncFormatter(lambda v, _: f"{v:g}" if v >= 1 else f"{v:.2f}"))
-    ax.set_ylim(tpi * 0.35, peak * 4.0)
+    ax.set_ylim(tpi * 0.35, (gpu_bw * 3.0) if gpu_bw else (peak * 4.0))
+
+    if gpu_bw:
+        # The next tier up, on the same axis. Not a spoiler for figure 3 --
+        # figure 3's reveal is that COPYING destroys this, not that it is large.
+        ax.axhline(gpu_bw, color=t["gpu"], linewidth=2.0, linestyle=(0, (6, 4)),
+                   zorder=3, label="GPU memory bandwidth (data resident)")
 
     ax.axvline(PHYSICAL_CORES, color=t["axis"], linewidth=1.0, linestyle=(0, (2, 3)), zorder=2)
     ax.text(PHYSICAL_CORES, tpi * 0.45, f"  {PHYSICAL_CORES} physical cores",
@@ -201,10 +215,11 @@ def fig_naive_vs_pool(theme, rows):
 
     # The gap is the whole point of the slide.
     mid = xs[len(xs) // 2]
-    ax.annotate("", xy=(mid, peak), xytext=(mid, tpi),
-                arrowprops=dict(arrowstyle="<->", color=t["ink2"], linewidth=1.6))
-    ax.text(mid * 1.25, (peak * tpi) ** 0.5, f"{peak / tpi:,.0f}x", color=t["ink"],
-            fontsize=15, fontweight="bold", va="center", ha="left")
+    gap_arrow(ax, t, mid, tpi, peak, f"{peak / tpi:,.0f}x", dx=1.25)
+    if gpu_bw:
+        gap_arrow(ax, t, xs[-1] * 0.55, peak, gpu_bw,
+                  f"{gpu_bw / peak:.1f}x\nstill above", color=t["gpu"], dx=1.22,
+                  fontsize=13)
 
     ax.annotate(f"bounded by thread creation:\n~7.5 us to spawn, ~50 ns of work",
                 xy=(xs[2], tpi), xytext=(0.05, 0.16), textcoords="axes fraction",
@@ -213,7 +228,7 @@ def fig_naive_vs_pool(theme, rows):
                                 shrinkB=8))
     sat = min(xs, key=lambda v: abs(v - 64))
     ax.annotate("and it still saturates\nat 6 of 14 cores", xy=(sat, pool[sat]),
-                xytext=(0.52, 0.60), textcoords="axes fraction", color=t["cpu"],
+                xytext=(0.68, 0.55), textcoords="axes fraction", color=t["cpu"],
                 fontsize=12, fontweight="bold", ha="left",
                 arrowprops=dict(arrowstyle="->", color=t["cpu"], linewidth=1.2, shrinkA=0,
                                 shrinkB=8))
@@ -351,7 +366,7 @@ def fig_runtime_vs_size(theme, cpu_rows, gpu_rows):
     # L3 is 24 MB on this machine; mark where the working set outgrows it.
     l3_nodes = 24 * 1024 * 1024 / (sta_bytes_per_node())
 
-    def plot(specs, title, subtitle, name, note=None):
+    def plot(specs, title, subtitle, name, note=None, gaps=()):
         fig, ax, t = new_fig(theme)
         for med, color, style, label in specs:
             if not med:
@@ -365,6 +380,18 @@ def fig_runtime_vs_size(theme, cpu_rows, gpu_rows):
         ax.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: si(v)))
         ax.get_yaxis().set_major_formatter(
             FuncFormatter(lambda v, _: f"{v:g} ms" if v >= 1 else f"{v:g}"))
+        for lo_s, hi_s, color, fmt in gaps:
+            common = sorted(set(lo_s) & set(hi_s))
+            if not common:
+                continue
+            # Anchor at the LARGEST size: the ratio peaks higher at small sizes
+            # purely from cache residency and launch overhead, which would
+            # overstate it.
+            gx = common[-1]
+            gap_arrow(ax, t, gx * 0.62, min(lo_s[gx], hi_s[gx]), max(lo_s[gx], hi_s[gx]),
+                      fmt.format(ratio=max(lo_s[gx], hi_s[gx]) / min(lo_s[gx], hi_s[gx]),
+                                 nodes=si(gx)),
+                      color=color, dx=1.10, fontsize=13)
         ax.axvline(l3_nodes, color=t["axis"], linewidth=1.0, linestyle=(0, (2, 3)), zorder=2)
         ax.text(l3_nodes, ax.get_ylim()[0] * 1.6, "  working set outgrows L3",
                 color=t["muted"], fontsize=10, rotation=90, va="bottom", ha="left")
@@ -386,7 +413,8 @@ def fig_runtime_vs_size(theme, cpu_rows, gpu_rows):
          "One full STA propagation pass. Both axes log. All three lines are the "
          "same arithmetic.",
          "05_runtime_vs_size_cpu.png",
-         note="thread-per-node stops at 1M nodes:\nbeyond that a single pass takes minutes")
+         note="thread-per-node stops at 1M nodes:\nbeyond that a single pass takes minutes",
+         gaps=[(tpi, par, THEMES[theme]["naive"], "{ratio:,.0f}x faster\nat {nodes} nodes")])
 
     plot([(par, THEMES[theme]["cpu"], "-", "CPU: std::for_each(par_unseq)"),
           (xfer, THEMES[theme]["gpu"], (0, (5, 3)), "GPU: with copy in + copy out"),
@@ -394,7 +422,10 @@ def fig_runtime_vs_size(theme, cpu_rows, gpu_rows):
          "The copy costs more than the whole CPU does",
          "One full STA propagation pass. The dashed GPU line sits ABOVE the CPU "
          "line at every size.",
-         "06_runtime_vs_size_gpu.png")
+         "06_runtime_vs_size_gpu.png",
+         gaps=[(par, kern, THEMES[theme]["gpu"], "{ratio:.1f}x faster\nat {nodes} nodes"),
+               (xfer, par, THEMES[theme]["ink2"] if False else "#898781",
+                "{ratio:.1f}x SLOWER\nthan the CPU")])
 
 
 def sta_bytes_per_node():
@@ -420,7 +451,9 @@ def main():
     for theme in ("light", "dark"):
         print(f"{theme}:")
         peak, one, peak_n = fig_ceiling(theme, sta_rows)
-        fig_naive_vs_pool(theme, sta_rows)
+        gpu_bw = (next((float(r["gb_per_sec"]) for r in gpu_rows
+                        if r["impl"] == "gpu_kernel"), None) if gpu_rows else None)
+        fig_naive_vs_pool(theme, sta_rows, gpu_bw)
         if gpu_rows:
             fig_cpu_vs_gpu(theme, peak, one, peak_n, gpu_rows)
         if bd_rows:
