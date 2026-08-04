@@ -108,18 +108,19 @@ def draw(theme):
 
     # ---- left: intensity vs fanin -----------------------------------------
     ks = np.logspace(0, 7, 200, base=2)
-    for fn, lim, col, lab in ((intensity_ssta, 14 / 33, t["g2"], "SSTA (INSTA arithmetic)"),
-                              (intensity, 0.25, t["cpu"], "block-based STA")):
+    for fn, lim, col, lab in ((intensity_ssta, 14 / 33, t["g2"], "SSTA"),
+                              (intensity, 0.25, t["cpu"], "STA")):
         axk.plot(ks, fn(ks), color=col, linewidth=2.4, zorder=3, label=lab)
         axk.axhline(lim, color=col, linewidth=1.3, linestyle=(0, (5, 4)), zorder=2, alpha=0.7)
-        axk.text(1.15, lim + 0.006, f"bound {lim:.3f}", color=col, fontsize=10.5,
-                 fontweight="bold", va="bottom")
+        axk.text(1.12, lim + 0.008, f"bound {lim:.3f}", color=col, fontsize=10.5,
+                 fontweight="bold", va="bottom", ha="left")
         axk.scatter([FANIN], [fn(FANIN)], s=80, c=col, edgecolors=t["surface"],
                     linewidths=2, zorder=4)
-        axk.text(FANIN * 1.35, fn(FANIN) - 0.012, f"K={FANIN}: {fn(FANIN):.3f}", color=col,
-                 fontsize=10.5, fontweight="bold", va="top")
+        axk.text(FANIN * 1.45, fn(FANIN), f"K={FANIN}:  {fn(FANIN):.3f}", color=col,
+                 fontsize=10.5, fontweight="bold", va="center", ha="left")
 
-    leg = axk.legend(loc="lower right", frameon=False, fontsize=10.5)
+    leg = axk.legend(loc="lower right", frameon=False, fontsize=12, handlelength=1.6,
+                     labelspacing=0.5)
     for txt in leg.get_texts():
         txt.set_color(t["ink2"])
 
