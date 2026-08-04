@@ -20,7 +20,7 @@ with `./run_all.sh && python3 plot.py`.
 
 | act | approach | result | what's actually limiting it |
 |---|---|---:|---|
-| 1 | one `std::thread` per work item | 0.009 GB/s | thread **creation** (~7.5 µs each vs ~50 ns of work) |
+| 1 | one `std::thread` per work item | 0.009 GB/s | thread **creation** — 7.2 µs to spawn vs 1.4 ns of work, a 5,200:1 ratio |
 | 2 | thread pool / `std::for_each(par_unseq)` | 48.9 GB/s | **memory bandwidth** — saturates at 5–6 of 14 cores |
 | 3 | GPU, data resident | 429.7 GB/s | bandwidth again, but 8.8× more of it |
 | 3b | GPU, naive copy-in/copy-out | 11.9 GB/s | **PCIe** — 91% of the time is H2D |

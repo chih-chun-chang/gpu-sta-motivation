@@ -63,8 +63,9 @@ This is act 1 meeting act 2. Both axes are log, because the gap is four decades.
 - The orange dashed line is one `std::thread` per work item: **0.009 GB/s**. Flat,
   and it would stay flat however many you spawn — you are rate-limited by the
   thread you're spawning *from*.
-- Why: a `clone()` costs about 7.5 µs. The work is about 50 ns. You are measuring
-  the operating system, not timing analysis. **150:1 overhead.**
+- Why: a `clone()` costs about 7.2 µs. The work inside is about 1.4 ns. You are
+  measuring the operating system, not timing analysis. **5,200:1 overhead** — and
+  that ratio is exactly the gap drawn on the chart.
 - The blue curve is the same kernel through `std::for_each(par_unseq)`. 5,000×
   better — and then it stops at 6 of your 14 cores.
 - The move that matters: *"we deleted the obvious overhead and got five thousand

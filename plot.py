@@ -221,7 +221,7 @@ def fig_naive_vs_pool(theme, rows, gpu_bw=None):
                   f"{gpu_bw / peak:.1f}x\nstill above", color=t["gpu"], dx=1.22,
                   fontsize=13)
 
-    ax.annotate(f"bounded by thread creation:\n~7.5 us to spawn, ~50 ns of work",
+    ax.annotate("bounded by thread creation:\n7.2 us to spawn a thread,\n1.4 ns of work in it",
                 xy=(xs[2], tpi), xytext=(0.05, 0.16), textcoords="axes fraction",
                 color=t["naive"], fontsize=12, fontweight="bold", ha="left",
                 arrowprops=dict(arrowstyle="->", color=t["naive"], linewidth=1.2, shrinkA=0,

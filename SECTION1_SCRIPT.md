@@ -100,7 +100,7 @@ paraphrase.
 
 **Bullets**
 - One `std::thread` per node: **0.009 GB/s**
-- ~7.5 µs to spawn a thread, ~50 ns of actual work — **150 : 1**
+- **7.2 µs** to spawn a thread, **1.4 ns** of work inside it — **5,200 : 1**
 - Thread pool: 48.9 GB/s — a **5,188×** improvement
 - Same ceiling underneath. Still 6 of 14 cores.
 
@@ -113,10 +113,14 @@ paraphrase.
 >
 > [PAUSE]
 >
-> The reason is on the slide. Creating a thread costs about seven and a half
-> microseconds. The work inside it takes about fifty nanoseconds. You're paying a
-> hundred and fifty to one overhead. This benchmark isn't measuring timing
-> analysis at all — it's measuring the operating system.
+> The reason is on the slide. Creating a thread costs about seven microseconds.
+> The work inside it takes about one and a half nanoseconds. That's a ratio of
+> five thousand to one. This benchmark isn't measuring timing analysis at all —
+> it's measuring the operating system.
+>
+> And notice the line is flat. It would stay flat on a hundred cores, because the
+> loop that spawns the threads is serial — you're limited by the one thread doing
+> the spawning, not by the machine.
 >
 > So we move to a thread pool, and we get **five thousand times** faster.
 >
