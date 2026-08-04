@@ -1,201 +1,243 @@
 # Section 2 — GPU architecture — 10 minutes
 
-## The job of this section
+**Audience assumption: they know hardware, but not GPUs.** They are timing and
+EDA people — comfortable with datapaths, pipelines, queues and latency, but they
+have never written a kernel and do not know what a warp is. So build the
+vocabulary before using it. Nothing in this section assumes prior CUDA.
 
-Section 1 ended with a measured fact: the GPU speedup **equals the ratio of memory
-bandwidths**, not of FLOPs. So this section answers exactly one question:
+That means the order is: **what it looks like → how it executes → why that gives
+bandwidth → back to our number.** Little's Law is the payoff, not the opening.
 
-> **Why can a GPU move data ~9× faster than a CPU?**
+**[WP]** marks figures and numbers to take from the Hopper whitepaper rather than
+from me.
 
-Keep that question on screen. It stops the section becoming a general GPU tour,
-and it makes every slide load-bearing. A timing audience does not need to know
-what a tensor core is; they need to know why the bandwidth is there.
-
-**Numbers to pull from the Hopper whitepaper** (marked **[WP]** below) rather than
-from me: SM count, warps and registers per SM, cache sizes, HBM3 configuration.
-The latency figures I use are illustrative and I have labelled them as such.
+| slide | minutes | lands |
+|---|---:|---|
+| 1. What's inside the thing that did that | 2.0 | a GPU spends transistors differently |
+| 2. The hierarchy, with numbers | 2.0 | thread → warp → SM → GPU |
+| 3. SIMT: 32 threads, one instruction | 2.0 | the one genuinely alien idea |
+| 4. Why this gives bandwidth | 2.5 | latency hiding, Little's Law |
+| 5. Back to our 96% and 71% | 1.5 | theory predicts our measurement |
 
 ---
 
-## Slide 1 — The question, restated
+## Slide 1 — What's inside the thing that just did that?
+
+Comes straight after section 1's speedup figure. **[WP]** die shot, or the classic
+CPU-vs-GPU transistor-budget picture.
 
 **Bullets**
-- Section 1: GPU is 8.8× the CPU, and 448/49 ≈ 9. Not a coincidence.
-- Speedup = bandwidth ratio ⇒ the question is *why the bandwidth*
-- Two parts: **how wide the pipe is**, and **how you keep it full**
+- CPU: **14 big cores.** Most of the die is cache, branch prediction, out-of-order logic
+- GPU: **[WP] 132 small SMs.** Most of the die is arithmetic units and registers
+- Same transistor budget, opposite decision
+- CPU makes *one* thread fast. GPU runs *many* threads at once.
 
 **Script**
 
-> "We measured that the GPU wins by about nine times, and that nine is the ratio
-> of the two memory bandwidths — not the ratio of their FLOPs, which is about
-> four hundred. So the only question that matters for this workload is: why does
-> a GPU have nine times the memory bandwidth?
+> "So let's look at what actually did that. And I want to start with the one
+> design decision everything else follows from.
 >
-> There are two answers, and the second one is the interesting one. The first is
-> that the pipe is physically wider. The second is that a wide pipe is useless
-> unless you can keep it full — and *that* is what the whole SM design is for."
+> [PAUSE on the two die pictures]
+>
+> These have comparable transistor counts. On the CPU, most of that area is not
+> arithmetic — it's cache, branch predictors, out-of-order machinery. All of it
+> exists to make a *single* instruction stream go as fast as possible.
+>
+> On the GPU, most of the area is arithmetic units and registers. Almost none of
+> it is spent making any one thread fast. Individually, a GPU thread is *slower*
+> than a CPU thread — lower clock, no out-of-order, no speculation.
+>
+> Same budget, opposite decision. The CPU optimises one worker. The GPU gives up
+> on that and runs thousands of mediocre ones."
+
+**Do not** mention warps, SMs or CUDA cores yet. One idea per slide.
 
 ---
 
-## Slide 2 — Part one: the pipe is wider
+## Slide 2 — The hierarchy, with numbers
 
-**[WP] diagram:** the memory subsystem / die shot.
+**[WP]** the SM block diagram plus the full-chip diagram.
 
-**Bullets**
-- CPU: dual-channel DDR5, **128-bit** interface
-- RTX A4000: GDDR6, **256-bit**
-- H100: HBM3, **[WP] ~5120-bit** — stacked memory sitting on the package
-- Wider bus + faster memory technology = the raw ~9× and ~80×
+Build the vocabulary bottom-up. Every term gets a number so it stays concrete.
+
+| level | what it is | **[WP]** roughly |
+|---|---|---|
+| **thread** | one lane of arithmetic — computes one node in our kernel | — |
+| **warp** | **32 threads that execute together, always** | fixed at 32 |
+| **block** | a group of warps that share fast scratchpad memory | up to 1024 threads |
+| **SM** | the actual hardware unit: schedulers, registers, L1/shared | 132 per H100 |
+| **grid** | your whole launch, spread across all SMs | millions of threads |
 
 **Script**
 
-> "Physically, this is unglamorous. A desktop CPU talks to two channels of DDR5 —
-> a 128-bit interface. The A4000 has a 256-bit GDDR6 interface. An H100 has HBM3
-> stacked on the package with a bus thousands of bits wide.
+> "Four words, and then we're done with vocabulary.
 >
-> That is most of the raw number. Wider bus, faster memory, memory physically
-> closer to the chip. There's no trick here — you paid for it."
+> A **thread** is one lane of arithmetic. In our kernel, one thread computes one
+> node's arrival time — that's it.
+>
+> A **warp** is thirty-two threads that execute *together*. Not 'can' — always.
+> Hold that; it's the next slide.
+>
+> An **SM**, streaming multiprocessor, is the real hardware unit. It has warp
+> schedulers, a register file, and a scratchpad. Think of it as one core, except
+> a core that keeps dozens of warps resident at once. An H100 has [WP] a hundred
+> and thirty-two of these.
+>
+> And a **grid** is your whole launch. When we ran eight million nodes, that was
+> eight million threads — the hardware just streams them through the SMs."
 
-**Do not linger.** This part is intuitive and the audience will accept it in
-thirty seconds. The next slide is the one worth your time.
+**The comparison that makes it click for this audience:**
+
+> "A CPU core runs one thread and switches maybe every millisecond, and the switch
+> costs microseconds. An SM keeps dozens of warps resident and switches between
+> them *every cycle*, for free. That difference is the whole architecture."
 
 ---
 
-## Slide 3 — Part two: a wide pipe is useless unless you keep it full
+## Slide 3 — SIMT: 32 threads, one instruction
 
-**This is the hinge of the section.** Little's Law:
+This is the genuinely alien idea. Spend the time.
 
-```
-bytes in flight = bandwidth × latency
-```
+**Bullets**
+- One instruction is fetched and issued for **all 32 lanes** at once
+- You write scalar code for one node; hardware runs 32 nodes in lockstep
+- **If lanes disagree on a branch, both sides execute** and the wrong lanes idle
+- **If lanes read scattered addresses, one load becomes 32 loads**
 
-To *sustain* a bandwidth you must have that many bytes **outstanding** at all
-times — requests issued and not yet returned. Latencies below are illustrative
-(±, order-of-magnitude), the bandwidths are measured:
+**Script**
 
-| | bandwidth | latency | bytes that must be in flight |
+> "Here's the part that has no CPU equivalent.
+>
+> The hardware fetches *one* instruction and issues it to all thirty-two lanes of
+> a warp simultaneously. You write ordinary scalar code — 'compute node i' — and
+> thirty-two copies run in lockstep on thirty-two different nodes.
+>
+> That's the deal, and it has two consequences you cannot escape.
+>
+> First: if the thirty-two lanes hit a branch and disagree, the hardware runs
+> *both* sides, with the wrong lanes switched off. You pay for both. That's called
+> divergence.
+>
+> Second, and for us this is the important one: if those thirty-two lanes ask for
+> thirty-two *consecutive* addresses, the memory system turns that into one wide
+> transaction. If they ask for thirty-two scattered addresses, it becomes
+> thirty-two separate ones — and you get a thirty-second of the bandwidth.
+>
+> That's called coalescing, and it is why data layout is a performance decision on
+> a GPU rather than a matter of taste."
+
+**Tie to your own code — say this, it is concrete and it is yours:**
+
+> "It's why our benchmark stores fanin slot *k* contiguously across all nodes,
+> rather than each node's eight edges together. Adjacent threads then read
+> adjacent addresses."
+
+---
+
+## Slide 4 — Why this gives 9× the bandwidth
+
+Now they have the vocabulary, so the real explanation lands.
+
+**The surprise first:**
+- **GPU memory latency is *worse* than a CPU's** — hundreds of ns vs ~90
+- It is not faster at answering one request. It is slower.
+- It wins by having *thousands* of requests outstanding at once
+
+**Little's Law:** `bytes in flight = bandwidth × latency`
+
+| | bandwidth | latency* | must be in flight |
 |---|---:|---:|---:|
-| i5-13500, DDR5 | 49 GB/s | ~90 ns | **~4 KB** |
-| RTX A4000, GDDR6 | 448 GB/s | ~450 ns | **~200 KB** |
+| i5-13500, DDR5 | 49 GB/s | ~90 ns | ~4 KB |
+| RTX A4000, GDDR6 | 448 GB/s | ~450 ns | ~200 KB |
 | H100, HBM3 | 4000 GB/s | ~550 ns | **~2 MB** |
 
-**Bullets**
-- GPU memory latency is *worse* than CPU — roughly 5× worse
-- So to sustain 9× the bandwidth it needs ~50× more requests outstanding
-- A CPU core can hold ~10–16 outstanding misses. 14 cores ≈ a few hundred.
-- The GPU needs **thousands**. That requirement is what shapes the SM.
+\* latencies illustrative, order-of-magnitude; bandwidths measured
 
 **Script**
 
-> "Here's the part people find surprising. GPU memory latency is *worse* than a
-> CPU's — a few hundred nanoseconds against about ninety. The GPU is not faster
-> at answering any single request. It's slower.
+> "So: why is the bandwidth there? Two reasons, and the second is the interesting
+> one.
 >
-> [PAUSE]
+> The boring one: the bus is physically wider. Dual-channel DDR5 is a 128-bit
+> interface; the A4000 is 256-bit GDDR6; an H100 has HBM stacked on the package
+> with a bus thousands of bits wide. You paid for that.
 >
-> What it's good at is having enormous numbers of requests outstanding at once.
-> Little's Law: to sustain a bandwidth, the amount of data in flight has to be
-> bandwidth times latency. For this CPU that's about four kilobytes. For the
-> A4000 it's two hundred kilobytes. For an H100, two megabytes — permanently in
-> flight, just to keep the bus busy.
+> But a wide pipe is useless unless you keep it full. And here's the surprise —
+> [PAUSE] — GPU memory latency is *worse* than a CPU's. Several hundred
+> nanoseconds against about ninety. It is slower at answering any single request.
 >
-> A CPU core can track something like a dozen outstanding cache misses. Fourteen
-> cores gets you a few hundred. It is not physically capable of having two
-> megabytes in the air. So the CPU cannot use that bandwidth even if you gave it
-> the bus.
+> To *sustain* a bandwidth you need that much data permanently in flight —
+> bandwidth times latency. For this CPU it's four kilobytes. For an H100 it's two
+> megabytes, continuously, just to keep the bus busy.
 >
-> Everything about the SM follows from needing thousands of requests outstanding."
+> A CPU core can track about a dozen outstanding cache misses. Fourteen cores gets
+> you a few hundred. It physically cannot have two megabytes in the air — so it
+> couldn't use that bandwidth even if you gave it the bus.
+>
+> Now look back at the last two slides. Why does an SM keep dozens of warps
+> resident? So each can have loads outstanding. Why is the register file bigger
+> than the L1 cache — which never happens on a CPU? So a warp waiting on memory
+> can be parked for free and another swapped in the same cycle.
+>
+> The GPU doesn't avoid memory latency. It hides it. That's the whole machine."
+
+**Analogy if the room looks lost** — one line, then move on:
+
+> "A CPU is a chef who puts one dish in the oven and waits. A GPU is a kitchen with
+> sixty dishes in sixty ovens — every oven is slow, but something is always coming
+> out."
 
 ---
 
-## Slide 4 — That requirement *is* the SM design
+## Slide 5 — Which explains our 96% and 71%
 
-**[WP] diagram:** the SM block diagram.
-
-Now the architecture explains itself. Each feature answers "how do we keep
-thousands of requests in flight?":
-
-| feature | why it exists |
-|---|---|
-| **[WP]** many warps resident per SM | each can have loads outstanding |
-| **[WP]** enormous register file | a warp keeps its state in registers, so it can be parked mid-load |
-| warp scheduler picks a ready warp each cycle | switching costs **zero** cycles — no stack, no OS, no save/restore |
-| **[WP]** many SMs | multiply the whole thing |
-| small caches per thread | a GPU is not trying to *avoid* the memory access, only to overlap it |
-
-**Script**
-
-> "So look at the SM with that question in mind, and it stops being a list of
-> features and becomes one idea.
->
-> Why are there so many warps resident? So each can have a load outstanding.
-> Why is the register file enormous — bigger than the L1 cache, which never
-> happens on a CPU? Because a warp parked waiting on memory keeps all its state
-> in registers, so switching to another warp costs *nothing*. No stack to save,
-> no kernel involved. On a CPU a context switch costs microseconds; here it costs
-> zero cycles.
->
-> That's the trade. A CPU spends its transistors on cache and out-of-order
-> execution to *avoid* stalling. A GPU accepts the stall and switches to another
-> warp. It doesn't avoid latency — it hides it."
-
----
-
-## Slide 5 — Why *our* kernel got 96% on one card and 71% on the other
-
-This is where the section pays for itself: the theory predicts a number you
-already measured in section 1.
+The payoff: the architecture predicts a number already on screen from section 1.
 
 **Bullets**
-- Our kernel loads scalar floats: 32 lanes × 4 B = **128 B outstanding per warp**
-- A4000 needs ~200 KB ÷ 128 B ≈ **1,600 warps**; it holds **[WP] ~2,300** ✓
-- H100 needs ~2 MB ÷ 128 B ≈ **17,000 warps**; it holds **[WP] ~8,400** ✗
-- ⇒ on H100, thread-level parallelism alone is not enough. You also need wider
-  loads per thread (`float4`) so each warp has more bytes in flight.
-- **Measured: 96% of peak on the A4000, 71% on the GH200.** That is the gap.
+- Our kernel loads scalar floats: 32 lanes × 4 B = **128 B in flight per warp**
+- A4000 needs ~200 KB ÷ 128 B ≈ **1,600 warps**; holds **[WP] ~2,300** ✓
+- H100 needs ~2 MB ÷ 128 B ≈ **17,000 warps**; holds **[WP] ~8,400** ✗
+- **Measured: 96% of peak on the A4000, 71% on the GH200**
+- Fix is not more threads — it's more bytes per thread (`float4` loads)
 
 **Script**
 
-> "And this predicts something we already measured. Our kernel loads plain floats
-> — thirty-two lanes times four bytes, so one hundred and twenty-eight bytes
-> outstanding per warp.
+> "And this predicts something we already measured, before I knew why.
 >
-> On the A4000 you need about sixteen hundred warps in flight to saturate, and
-> the card holds around twenty-three hundred. Comfortable — and we measured
+> Our kernel loads plain floats. Thirty-two lanes, four bytes each — a hundred and
+> twenty-eight bytes outstanding per warp.
+>
+> On the A4000 you need about sixteen hundred warps in flight to saturate the bus,
+> and the card holds around twenty-three hundred. It fits — and we measured
 > ninety-six percent of peak bandwidth.
 >
-> On an H100 you'd need seventeen thousand, and it holds about eight thousand.
-> It doesn't fit. You can't get there with more threads — you need each thread to
-> have more bytes in the air, which means vector loads.
+> On the H100 you'd need seventeen thousand, and it holds about eight thousand. It
+> does not fit. And more threads won't save you, because the limit is warps
+> *resident*. You need each thread to have more bytes in the air — vector loads.
 >
-> We measured seventy-one percent on the GH200. That's the gap, and now you know
-> what it is."
+> We measured seventy-one percent on the GH200. That's the gap, and that's what it
+> is."
 
-> ⚠️ Verify the warp-residency numbers against the whitepaper before presenting,
-> and re-measure the GH200 percentage if you change the kernel. The *shape* of the
-> argument is solid; the exact warp counts should come from **[WP]**.
+> ⚠️ Check warp-residency against **[WP]** before presenting. The argument is
+> robust to the exact figures; the conclusion is not sensitive to a 20% error.
 
 ---
 
 ## Transition into Section 3
 
-> "So the bandwidth is there, and the machine is built to keep it busy. But it
-> only works if the thirty-two lanes of a warp ask for thirty-two *consecutive*
-> addresses. Which brings us to how you actually write this."
-
-That hands straight to coalescing, which is section 3's first point — and it is
-also why the benchmark stores fanin slot *k* contiguously across nodes.
+> "So that's the machine, and why it has the bandwidth. Which leaves the question
+> of how you write something that keeps a hundred and thirty-two SMs busy — and
+> what that costs you when your timing graph doesn't cooperate."
 
 ---
 
 ## If you are running short
 
-Cut in this order:
-1. **Slide 2** (the physical bus) — one sentence covers it: "wider bus, faster
-   memory, closer to the die."
-2. The register-file detail on slide 4 — keep the diagram, drop the numbers.
-3. **Never cut slides 3 or 5.** Slide 3 is the idea, slide 5 is the payoff that
-   connects it to your own measurement.
+1. **Slide 1** can compress to one sentence over the die shot.
+2. The block/grid rows on slide 2 — warp and SM are the only two you need.
+3. Drop the divergence half of slide 3, keep coalescing (you need it for §3).
+4. **Never cut slides 4 or 5.** Slide 4 is the explanation; slide 5 is the proof
+   that it explains *your* data.
 
 ## The one sentence for the section
 
