@@ -238,6 +238,50 @@ paraphrase.
 - **Numbers you must know cold:** 2.2× · 5,000× · 8× · 96%. Everything else can
   be read off the slide.
 
+### "Why is it memory bound?" — the three answers, shortest first
+
+This is the question a GPU person in the room will ask, and you should be able to
+answer it at whatever depth they want.
+
+**1. The intuition (say this first — it is the real reason).**
+
+> "Every byte is read exactly once. There is no reuse to exploit — each timing
+> edge is touched by exactly one node, so there is nothing to cache, nothing to
+> tile, nothing to block. Compare it with matrix multiply, where you do N³ work on
+> N² data: there the intensity *grows* with the problem, so you can tile your way
+> into being compute bound. Here the intensity is a constant, and it's tiny. You
+> cannot make this compute bound by making the problem bigger."
+
+**2. The arithmetic (if they want the number).**
+
+Per node: 8 arrival loads + 8 delay loads + 1 store = **68 bytes**, against 8 adds
+and 7 maxes = **15 flops**. That is **0.22 flops/byte**. (If you only count the
+adds as real FLOPs it is 0.12 — even further down.)
+
+Now compare it against *machine balance* — peak FLOP/s ÷ peak bytes/s, the
+intensity at which a machine stops being memory limited:
+
+| machine | balance | kernel is below it by |
+|---|---:|---:|
+| i5-13500 (~1.4 TF FP32, 49 GB/s) | 28 flops/byte | 127× |
+| RTX A4000 (19.2 TF, 448 GB/s) | 43 flops/byte | 194× |
+| H100 / GH200 (67 TF, 4023 GB/s) | 17 flops/byte | 75× |
+
+> "You need something like seventeen to forty flops per byte before arithmetic
+> starts to matter on these machines. We have a fifth of one. We're two orders of
+> magnitude into the memory-bound regime — it isn't close."
+
+Note the direction: the **H100 has the *lowest* balance** of the three, because its
+bandwidth grew faster than its FP32 throughput. Newer hardware doesn't rescue
+you here.
+
+**3. The proof (if someone is still unconvinced — this ends it).**
+
+> "We don't actually have to argue about it. The kernel achieves 430 gigabytes a
+> second against a card peak of 448 — ninety-six percent of the memory bandwidth
+> of the device. You cannot saturate memory bandwidth *and* be compute bound.
+> That measurement is the answer."
+
 ### Likely questions in this section
 
 **"Your CPU baseline isn't optimised."** It's `par_unseq`, so it's threaded and

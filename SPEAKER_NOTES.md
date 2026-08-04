@@ -163,7 +163,7 @@ deep paths, which is a numerics discussion, not a precision-of-storage one — a
 FP64 on this card runs at 1/64 rate, which is exactly why the choice matters.
 
 **"You're measuring bandwidth, not timing analysis."**
-Yes — deliberately. That IS the finding. If your kernel is 0.25 flops per byte,
+Yes — deliberately. That IS the finding. If your kernel is 0.22 flops per byte,
 the only number that predicts your runtime is bandwidth.
 
 ---

@@ -49,7 +49,7 @@ def draw(theme):
     fig.patch.set_facecolor(t["surface"])
     ax.set_facecolor(t["surface"])
     ax.set_xlim(-2.6, 11.4)
-    ax.set_ylim(-1.3, 8.5)
+    ax.set_ylim(-2.5, 8.5)
     ax.axis("off")
 
     x0 = 0.35
@@ -115,12 +115,18 @@ def draw(theme):
             ha="left", va="top", color=t["ink2"], fontsize=12)
 
     # --- the number that decides everything ---------------------------------
-    ax.text(-2.5, -1.15,
-            f"Per node: {FANIN}×2 loads + 1 store = {FANIN * 2 * 4 + 4} bytes, "
-            f"{FANIN * 2 - 1} flops  "
-            r"$\approx 0.25$ flops/byte  $\rightarrow$  memory-bandwidth bound, "
-            "not compute bound.",
+    bytes_per_node = FANIN * 2 * 4 + 4
+    ops_per_node = FANIN * 2 - 1  # kFanin adds + (kFanin-1) maxes
+    ax.text(-2.5, -0.80,
+            f"Per node: {FANIN}×2 loads + 1 store = {bytes_per_node} bytes, "
+            f"{ops_per_node} flops  "
+            rf"$\approx {ops_per_node / bytes_per_node:.2f}$ flops/byte",
             ha="left", va="bottom", color=t["ink"], fontsize=12.5, fontweight="bold")
+    ax.text(-2.5, -1.25,
+            "Every byte is read exactly once — there is no reuse to exploit. These "
+            "machines need 17–43 flops/byte to break even,\nso this is "
+            "memory-bandwidth bound by two orders of magnitude — at any problem size.",
+            ha="left", va="top", color=t["ink2"], fontsize=11.5)
 
     out = FIGS if theme == "light" else os.path.join(FIGS, "dark")
     os.makedirs(out, exist_ok=True)

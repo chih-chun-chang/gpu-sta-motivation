@@ -39,7 +39,7 @@ work item is a 10 ms blocking sleep, so their curve peaks and collapses. Ours is
 **Open decisions**
 
 - A roofline chart is **not** built. Recommended as a backup slide rather than one
-  of the main four: it turns the measurement into a prediction (0.25 flops/byte →
+  of the main four: it turns the measurement into a prediction (0.22 flops/byte →
   speedup should equal the bandwidth ratio; 448/49 = 9.1 predicted vs 8.8
   measured), which is useful when re-running on new hardware.
 
@@ -162,8 +162,12 @@ Two large vectors, an elementwise add, a max-reduction over each node's fanin
 window. 8M nodes × 8 fanin = **64M timing edges, 544 MB working set** — 22× this
 machine's L3, so nothing is hiding in cache.
 
-Per node it moves 68 bytes and does 15 flops: **~0.25 flops/byte**. This kernel is
-bound by memory bandwidth, not arithmetic. That is the honest STA regime, and it
+Per node it moves 68 bytes and does 15 flops: **0.22 flops/byte**. Machine balance
+(peak FLOP/s ÷ peak bytes/s) is 28 on this CPU, 43 on the A4000 and 17 on an
+H100 — so the kernel sits two orders of magnitude inside the memory-bound regime,
+and no problem size changes that, because every byte is read exactly once and
+there is no reuse to exploit. This kernel is bound by memory bandwidth, not
+arithmetic. That is the honest STA regime, and it
 is why every result below tracks bandwidth ratios rather than FLOP ratios.
 
 ## Results on this machine

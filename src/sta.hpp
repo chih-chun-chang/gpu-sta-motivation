@@ -17,7 +17,7 @@
 // like this is what GPU STA implementations actually do.
 //
 // ARITHMETIC INTENSITY. Per node: K*8 bytes read + 4 bytes written, against
-// K adds and K-1 maxes. About 0.25 flops/byte -- this kernel is bound by
+// K adds and K-1 maxes. About 0.22 flops/byte -- this kernel is bound by
 // memory bandwidth, not by arithmetic. That is the honest STA regime, and it
 // is why the GPU advantage here tracks the bandwidth ratio rather than the
 // FLOP ratio.
@@ -44,7 +44,7 @@ namespace sta {
 constexpr int kFanin = STA_FANIN;
 
 // Values are float, not double, and that is a bandwidth decision rather than a
-// precision one. This kernel is memory bound at ~0.25 flops/byte, so doubles
+// precision one. This kernel is memory bound at ~0.22 flops/byte, so doubles
 // would move 136 bytes per node instead of 68 and roughly halve throughput on
 // CPU and GPU alike. (On the RTX A4000 doubles would also hit a 1/64-rate FP64
 // path; on H100/GH200 FP64 runs at 1/2 rate, so there the cost really is just
