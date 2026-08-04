@@ -5,6 +5,17 @@
 // arithmetic than that." So we take the arithmetic from a real implementation
 // and measure it.
 //
+// NOTATION (INSTA's, kept so the two can be diffed):
+//   p_*   parent    -- the arrival time arriving from the fanin node
+//   c_*   cell arc  -- the delay of the timing arc itself
+//   pm/ps parent mean / parent sigma;  m/sd  candidate mean / sigma
+//   neg   the arc is negative-unate (inverting). An inverter turns a rising
+//         input into a falling output, so a negative-sense arc takes the
+//         output's rise from the parent's FALL, and vice versa.
+//
+// It is the same "arrival_in + delay" as block-based STA, with (mean, sigma)
+// pairs instead of single numbers, done twice (rise and fall).
+//
 // Modelled on INSTA's topk_arrival_kernel.cu. Per candidate (one fanin edge,
 // one parent top-K slot), for each of the two transitions:
 //

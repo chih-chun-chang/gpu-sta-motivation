@@ -363,6 +363,7 @@ overhead dominates, which would overstate it).
 python3 plot.py         # figures 01-06
 python3 draw_problem.py  # the problem-formulation diagram
 python3 draw_roofline.py # the roofline backup slide
+python3 draw_problem_ssta.py  # the SSTA kernel diagram
 ```
 
 `run_all.sh` sets `ulimit -s 1024` — the blocking-I/O contrast sweep holds 4096
@@ -383,6 +384,7 @@ src/bench_gpu.cu        Mandelbrot on the GPU
 plot.py                 CSVs -> figures 01-06
 draw_problem.py         the problem-formulation diagram (00)
 draw_roofline.py        the roofline backup slide (07)
+draw_problem_ssta.py    the SSTA kernel diagram (08)
 ```
 
 There is no hand-written thread pool: the CPU benchmark uses `std::for_each` with

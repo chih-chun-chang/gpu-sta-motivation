@@ -8,6 +8,21 @@ So we take the arithmetic from a real implementation and measure it.
 
 ## The kernel
 
+![SSTA propagation](../figures/08_problem_ssta.png)
+
+Same shape as block-based STA — an add, then a max over the fanin window — except
+every value is a `(mean, sigma)` pair, and the whole thing runs twice, once per
+transition.
+
+**Notation** (INSTA's, kept so the two can be diffed):
+
+| | |
+|---|---|
+| `p_*`, `pm`, `ps` | **parent** — the arrival time arriving from the fanin node |
+| `c_*`, `c_mean`, `c_std` | **cell arc** — the delay of the timing arc itself |
+| `neg` | the arc is **negative-unate** (inverting). An inverter turns a rising input into a falling output, so a negative-sense arc takes the output's rise from the parent's *fall* |
+| `sigma` | the POCV multiplier on the ranking key, 3 here |
+
 Modelled on INSTA's `custom_ops/topk_arrival_kernel.cu`. Per candidate — one
 fanin edge, one parent top-K slot — for **each of the two transitions**:
 
