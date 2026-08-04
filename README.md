@@ -38,10 +38,11 @@ work item is a 10 ms blocking sleep, so their curve peaks and collapses. Ours is
 
 **Open decisions**
 
-- A roofline chart is **not** built. Recommended as a backup slide rather than one
-  of the main four: it turns the measurement into a prediction (0.22 flops/byte →
-  speedup should equal the bandwidth ratio; 448/49 = 9.1 predicted vs 8.8
-  measured), which is useful when re-running on new hardware.
+- The roofline is built (`draw_roofline.py` → `figures/07_roofline.png`) and is a
+  **backup slide**, not one of the main five. Left panel: intensity is
+  (2K−1)/(8K+4), which tends to 1/4, so no fanin escapes the memory-bound regime.
+  Right panel: the kernel's entire reachable intensity band against all three
+  machines' rooflines, with the measured points sitting on the memory roofs.
 
 ## Porting to H100 and GH200
 
@@ -303,7 +304,8 @@ overhead dominates, which would overstate it).
 ```sh
 ./run_all.sh            # ~15 min: builds, sweeps, writes data/*.csv
 python3 plot.py         # figures 01-06
-python3 draw_problem.py # the problem-formulation diagram
+python3 draw_problem.py  # the problem-formulation diagram
+python3 draw_roofline.py # the roofline backup slide
 ```
 
 `run_all.sh` sets `ulimit -s 1024` — the blocking-I/O contrast sweep holds 4096
@@ -323,6 +325,7 @@ src/bench_threads.cpp   throughput vs thread count (--mode io | cpu)
 src/bench_gpu.cu        Mandelbrot on the GPU
 plot.py                 CSVs -> figures 01-06
 draw_problem.py         the problem-formulation diagram (00)
+draw_roofline.py        the roofline backup slide (07)
 ```
 
 There is no hand-written thread pool: the CPU benchmark uses `std::for_each` with

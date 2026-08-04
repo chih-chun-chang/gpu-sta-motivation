@@ -282,6 +282,19 @@ Note the direction: the **H100 has the *lowest* balance** of the three, because 
 bandwidth grew faster than its FP32 throughput. Newer hardware doesn't rescue
 you here.
 
+**Backup slide: `figures/07_roofline.png`.** Do not show this unless asked — it
+costs 90 seconds and a concept. But if a GPU person pushes, it is the complete
+answer on one slide:
+
+> "Left panel: intensity as a function of fanin. It's (2K−1) over (8K+4), which
+> tends to one quarter. So there is no fanin — none — that gets this kernel above
+> 0.25 flops per byte. Widening the window doesn't help.
+>
+> Right panel: the shaded band is *every* intensity this kernel can reach, on the
+> roofline for all three machines. It never touches a ridge point. And the
+> diamonds are the measured throughput — they sit on the sloped memory roofs.
+> That's not a prediction, that's where the runs landed."
+
 **3. The proof (if someone is still unconvinced — this ends it).**
 
 > "We don't actually have to argue about it. The kernel achieves 430 gigabytes a
