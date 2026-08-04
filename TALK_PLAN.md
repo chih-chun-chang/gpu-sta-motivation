@@ -67,6 +67,8 @@ The two-machine result is your strongest card here. Say it explicitly:
 
 ## Section 2 — GPU architecture (10 min)
 
+**Fully drafted in [SECTION2_PLAN.md](SECTION2_PLAN.md).** Summary below.
+
 Source: NVIDIA Hopper (H100) architecture whitepaper.
 
 **The one sentence:** *a GPU is not a fast CPU, it is a bandwidth machine that
