@@ -216,6 +216,46 @@ would still be ~94% of the time.
 CPU and GPU produce **bit-identical results** (checksum `9386759311749429`) —
 `-ffp-contract=off` on the host, `--fmad=false` on the device.
 
+### Where each number comes from
+
+Three provenances, and it is worth keeping them apart when defending the work.
+
+**Measured by this repo** — reproducible via `./run_all.sh`, raw data in `data/*.csv`:
+
+| number | source |
+|---|---|
+| i5-13500 48.9 GB/s, saturation at 5–6 threads, 2.2× | `data/sta_cpu.csv` |
+| thread-per-node 0.0094 GB/s, the 5,188× gap | `data/sta_cpu.csv` |
+| A4000 429.7 GB/s resident, 11.9 staged, 42.6 managed | `data/gpu_sta.csv` |
+| transfer breakdown 43.8 / 1.33 / 2.8 ms → 97% | `data/gpu_breakdown.csv` |
+| runtime vs problem size | `data/size_*.csv` |
+| GH200 2852 GB/s, 126.6 GB/s link, 96% transfer share | measured on the GH200 |
+| CPU/GPU checksum equality | printed by both binaries |
+
+**Vendor specifications** — the roofline *lines* only. NVIDIA datasheet figures
+(FP32 non-tensor), verified August 2026:
+
+| | FP32 | bandwidth |
+|---|---:|---:|
+| RTX A4000 | 19.2 TF | 448 GB/s |
+| A100 80GB | 19.5 TF | 2039 GB/s |
+| GH200 (H100, 96 GB HBM3) | 67 TF | 4000 GB/s |
+
+**Estimated** — flagged on the figure itself:
+
+- The i5-13500's ~1.37 TFLOPS peak FP32. Intel does not publish a peak-FLOPS
+  figure for consumer parts; this is cores × clock × AVX2 FMA width, so treat it
+  as ±30%. It only positions the CPU's ridge point, and the kernel sits ~100×
+  away from it, so nothing depends on the precision.
+- The CPU's memory roof uses this repo's *measured* streaming rate rather than a
+  DIMM spec (unreadable without root), which is why the CPU's measured point sits
+  on its own roof by construction.
+
+**Note on the A100 line:** nothing here was run on an A100. That roofline is
+vendor spec only — which is why it carries no measured diamond. It is there to
+show the ridge-point trend across generations (A4000 43 → GH200 17 → A100 9.6),
+not to claim a result.
+
 ### The `std::execution::par` trap
 
 libstdc++ implements C++17 parallel algorithms on Intel TBB. **Without TBB linked,

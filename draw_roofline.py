@@ -35,7 +35,8 @@ FANIN = 8
 
 # name, peak FP32 GFLOP/s (non-tensor), peak GB/s, measured GB/s or None, colour key
 #
-# Vendor figures, checked August 2026:
+# Vendor figures, checked against NVIDIA datasheets and independently verified
+# by the author (August 2026):
 #   RTX A4000    19.2 TF FP32, 448 GB/s      (NVIDIA RTX A4000 datasheet)
 #   A100 80GB    19.5 TF FP32, 2039 GB/s     (NVIDIA A100 80GB datasheet, SXM)
 #   GH200 H100   67  TF FP32, 4000 GB/s      (NVIDIA GH200 datasheet, 96GB HBM3)
