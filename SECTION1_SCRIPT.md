@@ -325,6 +325,37 @@ the friendliest ridge point. Details in `ssta/README.md`.
 > of the device. You cannot saturate memory bandwidth *and* be compute bound.
 > That measurement is the answer."
 
+### "Why doesn't spawning thousands of threads give more parallelism?"
+
+Expect this one. Two bottlenecks are in play and they are different — say so
+explicitly, because conflating them is what makes the answer sound hand-wavy.
+
+> "A thread is a unit of *scheduling*, not a unit of *execution*. This machine has
+> twenty hardware threads, full stop. Spawn a thousand and the OS time-slices them
+> across the same twenty — each gets two percent of a core, and the total work per
+> second doesn't move. Threads buy you concurrency, not parallelism.
+>
+> Now, figure two and figure one are actually showing two different walls.
+>
+> Figure two is thread *creation*. The loop that spawns them is serial — seven
+> microseconds each — so you're limited by the one thread handing out work, not by
+> the machine. That one is fixable, and a pool fixes it.
+>
+> Figure one is what's underneath. Once creation cost is gone, throughput
+> saturates at five or six threads because they're all queued on the same memory
+> controller. That one is not fixable with threads at all."
+
+Then land the sharpest form, which is stronger than "more threads don't help":
+
+> "We have fourteen cores. The memory bus saturates at five. We couldn't use the
+> parallelism we already had — so more threads was never going to be the answer.
+> The only way up is more bandwidth."
+
+**The exception, if they push:** blocking I/O. A blocked thread occupies no core,
+so thousands of them genuinely do buy throughput — that curve climbs past 4,000×
+while this one flatlines at 2.2×. Same thread count, opposite outcome, because a
+different resource is exhausted. `--mode io` in `bench_threads` measures it.
+
 ### Likely questions in this section
 
 **"Your CPU baseline isn't optimised."** It's `par_unseq`, so it's threaded and
