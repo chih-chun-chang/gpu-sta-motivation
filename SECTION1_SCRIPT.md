@@ -23,7 +23,7 @@ paraphrase.
 - `arrival[i] = max over fanin k of ( arrival_in[i][k] + delay[i][k] )`
 - Two large vectors in, an add, a max over each node's fanin window
 - 8M nodes × 8 fanin = **64M timing edges**, 544 MB
-- ≈ **0.25 flops per byte**
+- ≈ **0.22 flops per byte** — machines need 17–43 to break even
 
 **Script** *(~75 s)*
 
@@ -43,7 +43,14 @@ paraphrase.
 >
 > Now, the number at the bottom of this slide is the one that decides everything
 > that follows. Per node we move sixty-eight bytes and do fifteen floating-point
-> operations. That's a quarter of a flop per byte.
+> operations. That's about a fifth of a flop per byte.
+>
+> And the reason that matters: every byte here is read exactly once. There's no
+> reuse — each timing edge belongs to exactly one node. Nothing to cache, nothing
+> to tile. So that ratio is fixed, no matter how big the design gets.
+>
+> These machines need somewhere between seventeen and forty flops per byte before
+> arithmetic starts to be the limit. We have a fifth of one.
 >
 > This kernel is not limited by arithmetic. It is limited by memory bandwidth.
 > Hold on to that, because every result I'm about to show you follows from it.
