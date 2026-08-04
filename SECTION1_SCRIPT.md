@@ -301,17 +301,17 @@ measurement, not argument:
 
 > "Agreed, so we implemented the statistical propagation from INSTA — means add,
 > standard deviations combine in quadrature with a square root, both rise and
-> fall transitions, sense inversion, ranked by mean plus sigma times sigma. Seven
+> fall transitions, sense inversion, ranked by mean plus sigma times sigma. Eight
 > times the arithmetic per edge.
 >
-> The arithmetic intensity went from 0.22 to 0.40. Because every value became a
+> The arithmetic intensity went from 0.22 to 0.45. Because every value became a
 > mean-and-sigma pair and there are two transitions, so the data grew nearly as
 > fast as the maths did.
 >
 > On the same card that kernel achieves ninety-six percent of peak memory
-> bandwidth — and nine tenths of one percent of peak FLOPs. It's in the repo."
+> bandwidth — and one percent of peak FLOPs. It's in the repo."
 
-The ceiling over *all* fanin is 14/33 = 0.424, still an order of magnitude below
+The ceiling over *all* fanin is 16/33 = 0.485, still an order of magnitude below
 the friendliest ridge point. Details in `ssta/README.md`.
 
 **3. The proof (if someone is still unconvinced — this ends it).**

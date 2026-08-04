@@ -22,8 +22,13 @@ from its fall; a negative-sense arc swaps them. Candidates are ranked by `arr`
 and the largest kept.
 
 That is 7 flops per edge per transition — an add, two multiplies, an add, a
-**square root**, a multiply and an add — so **14 per edge**, against 2 for
-block-based STA. Seven times the arithmetic.
+**square root**, a multiply and an add — plus the comparison that keeps the
+largest, so **16 per edge** against 2 for block-based STA. Eight times the
+arithmetic.
+
+Counting convention: adds, multiplies, comparisons and `sqrt` each count as one
+operation, and the same convention is applied to block STA (where the `max`
+counts too). Mixing conventions would flatter one kernel over the other.
 
 INSTA keeps the top **K** with startpoint dedup, in two phases: build the
 candidate arrays in global memory, then run K argmax passes over them. We keep
@@ -37,22 +42,22 @@ not less.
 |  | block STA | SSTA (INSTA) |
 |---|---:|---:|
 | bytes per node (K=8) | 68 | 280 |
-| flops per node | 15 | 112 |
-| **arithmetic intensity** | **0.221** | **0.400** |
-| upper bound over all K | 0.250 | **0.424** |
+| flops per node | 15 | 126 |
+| **arithmetic intensity** | **0.221** | **0.450** |
+| upper bound over all K | 0.250 | **0.485** |
 
-Seven times the arithmetic bought **1.8× the intensity**, because every value is
+Eight times the arithmetic bought **2× the intensity**, because every value is
 now a `(mean, std)` pair and there are two transitions — the data grew almost as
 fast as the maths did. Measured on the same RTX A4000:
 
 |  | achieved BW | % of 448 GB/s peak | achieved FLOP/s | % of 19.2 TF peak |
 |---|---:|---:|---:|---:|
 | block STA | 429.7 GB/s | 95.9% | 95 GFLOP/s | 0.50% |
-| **SSTA** | **431.9 GB/s** | **96.4%** | 172.8 GFLOP/s | **0.90%** |
+| **SSTA** | **431.9 GB/s** | **96.4%** | 194.3 GFLOP/s | **1.01%** |
 
-**The statistical kernel uses 96% of the card's memory bandwidth and 0.9% of its
+**The statistical kernel uses 96% of the card's memory bandwidth and 1% of its
 arithmetic.** Machine balance is 9.6–43 flops/byte; this kernel tops out at
-0.424. It is not close, and no fanin changes that.
+0.485. It is not close, and no fanin changes that.
 
 CPU side, same machine as the rest of the repo: best 34.3 GB/s, saturating
 around 6 threads — the same shape as the block-based kernel, at a lower ceiling

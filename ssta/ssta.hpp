@@ -19,10 +19,11 @@
 // even this is memory bound, K > 1 (which re-reads the candidate array K times)
 // is more so.
 //
-// Compared with the block-based kernel in ../src/sta.hpp this does roughly 7x
-// the arithmetic per edge (14 flops vs 2) but also moves 4x the data, because
-// every value is now a (mean, std) pair and there are two transitions. The
-// point of the exercise is that the *ratio* barely moves.
+// Compared with the block-based kernel in ../src/sta.hpp this does 8x the
+// arithmetic per edge (16 flops vs 2) but also moves 4x the data, because every
+// value is now a (mean, std) pair and there are two transitions. The point of
+// the exercise is that the *ratio* barely moves: 0.221 -> 0.450 flops/byte,
+// against a machine balance of 9.6 to 43.
 #pragma once
 
 #include <cmath>
@@ -123,10 +124,16 @@ inline size_t bytes_per_pass(size_t n_nodes) {
     return n_nodes * (static_cast<size_t>(kFanin) * (8 * sizeof(float) + 1) + 4 * sizeof(float));
 }
 
+// Counting convention: adds, multiplies, comparisons and sqrt each count as one
+// operation. The same convention is used for the block-based kernel in
+// ../src/sta.hpp, where the max counts as an operation too -- mixing the two
+// would flatter one kernel over the other.
+//
 // Per edge, per transition: 1 add (mean) + 2 mul + 1 add + 1 sqrt (std) +
-// 1 mul + 1 add (rank) = 7. Two transitions = 14.
+// 1 mul + 1 add (rank) = 7, and reducing K candidates costs K-1 comparisons.
+// Two transitions: 2 * (7K + K - 1) = 16K - 2.
 inline size_t flops_per_pass(size_t n_nodes) {
-    return n_nodes * static_cast<size_t>(kFanin) * 14;
+    return n_nodes * (16 * static_cast<size_t>(kFanin) - 2);
 }
 
 inline uint64_t checksum(const float* a, const float* b, const float* c, const float* d,

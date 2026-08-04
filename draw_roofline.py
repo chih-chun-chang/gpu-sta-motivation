@@ -72,11 +72,12 @@ def intensity(k):
 def intensity_ssta(k):
     """Statistical (POCV) propagation, the INSTA arithmetic.
 
-    Per fanin edge: 8 floats + a sense byte in (33 B), 14 flops (two
-    transitions x [add, 2 mul, add, sqrt, mul, add]). Per node: 4 floats out.
-    Tends to 14/33 = 0.424 -- higher than block STA, still far below balance.
+    Per fanin edge: 8 floats + a sense byte in (33 B). Per node: 4 floats out.
+    Flops: two transitions x [7 per edge + (K-1) comparisons] = 16K - 2, using
+    the same counting convention as block STA (comparisons count).
+    Tends to 16/33 = 0.485 -- higher than block STA, still far below balance.
     """
-    return 14.0 * k / (33.0 * k + 16.0)
+    return (16.0 * k - 2.0) / (33.0 * k + 16.0)
 
 
 # Measured on the RTX A4000 by this repo, both kernels on the same card.
@@ -108,7 +109,7 @@ def draw(theme):
 
     # ---- left: intensity vs fanin -----------------------------------------
     ks = np.logspace(0, 7, 200, base=2)
-    for fn, lim, col, lab in ((intensity_ssta, 14 / 33, t["g2"], "SSTA"),
+    for fn, lim, col, lab in ((intensity_ssta, 16 / 33, t["g2"], "SSTA"),
                               (intensity, 0.25, t["cpu"], "STA")):
         axk.plot(ks, fn(ks), color=col, linewidth=2.4, zorder=3, label=lab)
         axk.axhline(lim, color=col, linewidth=1.3, linestyle=(0, (5, 4)), zorder=2, alpha=0.7)
@@ -127,7 +128,7 @@ def draw(theme):
     axk.set_xscale("log", base=2)
     axk.set_xticks([1, 2, 4, 8, 16, 32, 64, 128])
     axk.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-    axk.set_ylim(0, 0.52)
+    axk.set_ylim(0, 0.58)
     axk.set_xlabel("Fanin K (log scale)", color=t["ink2"], fontsize=11.5, labelpad=8)
     axk.set_ylabel("Arithmetic intensity (flops/byte)", color=t["ink2"], fontsize=11.5,
                    labelpad=8)
@@ -136,7 +137,7 @@ def draw(theme):
 
     # ---- right: roofline ---------------------------------------------------
     x = np.logspace(-1.4, 2.4, 400)
-    lo, hi = intensity(1), 14.0 / 33.0  # both kernels' entire reachable range
+    lo, hi = intensity(1), 16.0 / 33.0  # both kernels' entire reachable range
 
     axr.axvspan(lo, hi, color=t["cpu"], alpha=0.13, zorder=1)
     axr.text((lo * hi) ** 0.5, 1.6e5, "both kernels,\nany fanin", color=t["cpu"],
@@ -181,9 +182,9 @@ def draw(theme):
 
     fig.text(0.5, -0.02,
              "Left: block STA intensity is (2K−1)/(8K+4) → 1/4; the INSTA statistical kernel "
-             "is 14K/(33K+16) → 14/33. Right: the band is every intensity either can reach.\n"
+             "is (16K−2)/(33K+16) → 16/33. Right: the band is every intensity either can reach.\n"
              "Diamonds are this repo's measured throughput. On the A4000 BOTH kernels reach "
-             "~96% of the vendor-peak memory roof and under 1% of peak FLOP/s.\n"
+             "~96% of the vendor-peak memory roof and ~1% of peak FLOP/s.\n"
              "GPU figures are NVIDIA datasheet peaks (FP32 non-tensor). The CPU roof uses this "
              "repo's measured streaming rate and its peak FLOP/s is an estimate.",
              color=t["muted"], fontsize=10.5, ha="center", va="top")
