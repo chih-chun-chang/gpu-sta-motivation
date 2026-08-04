@@ -47,11 +47,14 @@ BIN := bin
 # The STA benchmarks are the talk. bench_threads/bench_gpu are the
 # compute-bound Mandelbrot reference kept for the roofline contrast.
 STA_TARGETS  := $(BIN)/bench_sta $(BIN)/bench_sta_gpu
+# Statistical (POCV) propagation -- the INSTA arithmetic, for the roofline.
+SSTA_TARGETS := $(BIN)/bench_ssta $(BIN)/bench_ssta_gpu
 REF_TARGETS  := $(BIN)/bench_threads $(BIN)/bench_gpu
 
-.PHONY: all sta ref clean tbb-check tbb-info
-all: sta ref
+.PHONY: all sta ssta ref clean tbb-check tbb-info
+all: sta ssta ref
 sta: $(STA_TARGETS)
+ssta: $(SSTA_TARGETS)
 ref: $(REF_TARGETS)
 
 $(BIN):
@@ -62,6 +65,12 @@ $(BIN)/bench_sta: src/bench_sta.cpp src/sta.hpp | $(BIN)
 
 $(BIN)/bench_sta_gpu: src/bench_sta_gpu.cu src/sta.hpp | $(BIN)
 	$(NVCC) $(NVCCFLAGS) -o $@ $<
+
+$(BIN)/bench_ssta: ssta/bench_ssta.cpp ssta/ssta.hpp | $(BIN)
+	$(CXX) $(CXXFLAGS) -Issta -o $@ $< $(TBB_FLAGS)
+
+$(BIN)/bench_ssta_gpu: ssta/bench_ssta_gpu.cu ssta/ssta.hpp | $(BIN)
+	$(NVCC) $(NVCCFLAGS) -Issta -o $@ $<
 
 $(BIN)/bench_threads: src/bench_threads.cpp src/workload.hpp | $(BIN)
 	$(CXX) $(CXXFLAGS) -o $@ $<

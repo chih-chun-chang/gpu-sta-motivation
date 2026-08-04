@@ -1,0 +1,2 @@
+impl,intensity,gb_per_sec,gflop_per_sec,ms,checksum_ok
+gpu_kernel,0.40000,431.880,172.752,2.7193,1

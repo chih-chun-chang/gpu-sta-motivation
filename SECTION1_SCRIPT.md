@@ -295,6 +295,25 @@ answer on one slide:
 > diamonds are the measured throughput — they sit on the sloped memory roofs.
 > That's not a prediction, that's where the runs landed."
 
+**If they say "your kernel is too simple — real STA does more than an add and a
+max".** This is the strongest form of the objection, and it is answered by
+measurement, not argument:
+
+> "Agreed, so we implemented the statistical propagation from INSTA — means add,
+> standard deviations combine in quadrature with a square root, both rise and
+> fall transitions, sense inversion, ranked by mean plus sigma times sigma. Seven
+> times the arithmetic per edge.
+>
+> The arithmetic intensity went from 0.22 to 0.40. Because every value became a
+> mean-and-sigma pair and there are two transitions, so the data grew nearly as
+> fast as the maths did.
+>
+> On the same card that kernel achieves ninety-six percent of peak memory
+> bandwidth — and nine tenths of one percent of peak FLOPs. It's in the repo."
+
+The ceiling over *all* fanin is 14/33 = 0.424, still an order of magnitude below
+the friendliest ridge point. Details in `ssta/README.md`.
+
 **3. The proof (if someone is still unconvinced — this ends it).**
 
 > "We don't actually have to argue about it. The kernel achieves 430 gigabytes a

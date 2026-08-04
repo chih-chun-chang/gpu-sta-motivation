@@ -65,8 +65,25 @@ THEMES = {
 
 
 def intensity(k):
-    """(K adds + K-1 maxes) / (K*2 loads + 1 store, in bytes)."""
+    """Block-based STA: (K adds + K-1 maxes) / (K*2 loads + 1 store)."""
     return (2.0 * k - 1.0) / (8.0 * k + 4.0)
+
+
+def intensity_ssta(k):
+    """Statistical (POCV) propagation, the INSTA arithmetic.
+
+    Per fanin edge: 8 floats + a sense byte in (33 B), 14 flops (two
+    transitions x [add, 2 mul, add, sqrt, mul, add]). Per node: 4 floats out.
+    Tends to 14/33 = 0.424 -- higher than block STA, still far below balance.
+    """
+    return 14.0 * k / (33.0 * k + 16.0)
+
+
+# Measured on the RTX A4000 by this repo, both kernels on the same card.
+MEASURED = [
+    ("block STA", intensity(FANIN), 429.7, "gpu_sta"),
+    ("SSTA (INSTA)", intensity_ssta(FANIN), 431.9, "gpu_ssta"),
+]
 
 
 def style(ax, t):
@@ -91,36 +108,42 @@ def draw(theme):
 
     # ---- left: intensity vs fanin -----------------------------------------
     ks = np.logspace(0, 7, 200, base=2)
-    axk.plot(ks, intensity(ks), color=t["cpu"], linewidth=2.4, zorder=3)
-    axk.axhline(0.25, color=t["muted"], linewidth=1.4, linestyle=(0, (5, 4)), zorder=2)
-    axk.text(1.15, 0.2575, "upper bound: 0.25 flops/byte, for any fanin",
-             color=t["ink"], fontsize=11, fontweight="bold", va="bottom")
+    for fn, lim, col, lab in ((intensity_ssta, 14 / 33, t["g2"], "SSTA (INSTA arithmetic)"),
+                              (intensity, 0.25, t["cpu"], "block-based STA")):
+        axk.plot(ks, fn(ks), color=col, linewidth=2.4, zorder=3, label=lab)
+        axk.axhline(lim, color=col, linewidth=1.3, linestyle=(0, (5, 4)), zorder=2, alpha=0.7)
+        axk.text(1.15, lim + 0.006, f"bound {lim:.3f}", color=col, fontsize=10.5,
+                 fontweight="bold", va="bottom")
+        axk.scatter([FANIN], [fn(FANIN)], s=80, c=col, edgecolors=t["surface"],
+                    linewidths=2, zorder=4)
+        axk.text(FANIN * 1.35, fn(FANIN) - 0.012, f"K={FANIN}: {fn(FANIN):.3f}", color=col,
+                 fontsize=10.5, fontweight="bold", va="top")
 
-    axk.scatter([FANIN], [intensity(FANIN)], s=90, c=t["cpu"], edgecolors=t["surface"],
-                linewidths=2, zorder=4)
-    axk.annotate(f"K = {FANIN}\n{intensity(FANIN):.3f}", xy=(FANIN, intensity(FANIN)),
-                 xytext=(FANIN * 2.6, intensity(FANIN) - 0.055), color=t["ink"],
-                 fontsize=11.5, fontweight="bold",
-                 arrowprops=dict(arrowstyle="->", color=t["muted"], linewidth=1.2,
-                                 shrinkA=0, shrinkB=8))
+    leg = axk.legend(loc="lower right", frameon=False, fontsize=10.5)
+    for txt in leg.get_texts():
+        txt.set_color(t["ink2"])
 
     axk.set_xscale("log", base=2)
     axk.set_xticks([1, 2, 4, 8, 16, 32, 64, 128])
     axk.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-    axk.set_ylim(0, 0.30)
+    axk.set_ylim(0, 0.52)
     axk.set_xlabel("Fanin K (log scale)", color=t["ink2"], fontsize=11.5, labelpad=8)
     axk.set_ylabel("Arithmetic intensity (flops/byte)", color=t["ink2"], fontsize=11.5,
                    labelpad=8)
-    axk.set_title("Widening the fanin does not help", color=t["ink"], fontsize=14,
+    axk.set_title("Neither kernel can escape, at any fanin", color=t["ink"], fontsize=14,
                   fontweight="bold", loc="left", pad=12)
 
     # ---- right: roofline ---------------------------------------------------
     x = np.logspace(-1.4, 2.4, 400)
-    lo, hi = intensity(1), 0.25  # the kernel's entire reachable range
+    lo, hi = intensity(1), 14.0 / 33.0  # both kernels' entire reachable range
 
     axr.axvspan(lo, hi, color=t["cpu"], alpha=0.13, zorder=1)
-    axr.text((lo * hi) ** 0.5, 1.2e5, "the kernel,\nany fanin", color=t["cpu"],
+    axr.text((lo * hi) ** 0.5, 1.6e5, "both kernels,\nany fanin", color=t["cpu"],
              fontsize=11.5, fontweight="bold", va="top", ha="center")
+    for label, xi, _bw, _k in MEASURED:
+        axr.axvline(xi, color=t["muted"], linewidth=1.0, linestyle=(0, (2, 3)), zorder=2)
+        axr.text(xi, 1.7, f" {label}", color=t["ink2"], fontsize=9.5, rotation=90,
+                 va="bottom", ha="left")
 
     for name, peak, bw, achieved, key in MACHINES:
         axr.plot(x, np.minimum(peak, bw * x), color=t[key], linewidth=2.4, zorder=3,
@@ -130,6 +153,10 @@ def draw(theme):
         if achieved is not None:
             axr.scatter([intensity(FANIN)], [achieved * intensity(FANIN)], s=95, marker="D",
                         c=t[key], edgecolors=t["surface"], linewidths=1.8, zorder=5)
+        if name == "RTX A4000":  # both kernels measured on this card
+            xi = intensity_ssta(FANIN)
+            axr.scatter([xi], [431.9 * xi], s=95, marker="D", c=t[key],
+                        edgecolors=t["surface"], linewidths=1.8, zorder=5)
 
     axr.set_xscale("log")
     axr.set_yscale("log")
@@ -152,10 +179,10 @@ def draw(theme):
              color=t["ink2"], fontsize=10.5, ha="right")
 
     fig.text(0.5, -0.02,
-             "Left: intensity is (2K−1)/(8K+4), which tends to 1/4. Right: the shaded band is "
-             "every intensity this kernel can reach; it never meets a ridge point.\n"
-             "Diamonds are this repo's measured throughput: the A4000 reaches 96% of its "
-             "vendor-peak memory roof and the GH200 71%. That is what \"memory bound\" means.\n"
+             "Left: block STA intensity is (2K−1)/(8K+4) → 1/4; the INSTA statistical kernel "
+             "is 14K/(33K+16) → 14/33. Right: the band is every intensity either can reach.\n"
+             "Diamonds are this repo's measured throughput. On the A4000 BOTH kernels reach "
+             "~96% of the vendor-peak memory roof and under 1% of peak FLOP/s.\n"
              "GPU figures are NVIDIA datasheet peaks (FP32 non-tensor). The CPU roof uses this "
              "repo's measured streaming rate and its peak FLOP/s is an estimate.",
              color=t["muted"], fontsize=10.5, ha="center", va="top")

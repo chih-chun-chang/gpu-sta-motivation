@@ -49,6 +49,18 @@ work item is a 10 ms blocking sleep, so their curve peaks and collapses. Ours is
   per FLOP than workstation parts, so they move *toward* this kernel, not away
   from it.
 
+## Is it still memory bound with *real* STA arithmetic?
+
+Yes. `ssta/` implements the statistical (POCV) propagation from INSTA — means
+add, sigmas combine in quadrature via `sqrt`, both transitions, sense inversion,
+ranked by `mean + sigma*std`. That is **7× the arithmetic per edge**, and it
+moves the intensity from 0.221 to **0.400** (bounded by 14/33 = 0.424 over all
+fanin) — because every value became a `(mean, std)` pair and there are two
+transitions, so the data grew nearly as fast as the maths.
+
+Measured on the same A4000: **96.4% of peak memory bandwidth, 0.90% of peak
+FLOP/s.** See [ssta/README.md](ssta/README.md).
+
 ## Porting to H100 and GH200
 
 `make` uses `-arch=native`, so the build needs no change on either machine. Three
