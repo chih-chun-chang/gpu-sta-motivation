@@ -41,8 +41,13 @@ work item is a 10 ms blocking sleep, so their curve peaks and collapses. Ours is
 - The roofline is built (`draw_roofline.py` → `figures/07_roofline.png`) and is a
   **backup slide**, not one of the main five. Left panel: intensity is
   (2K−1)/(8K+4), which tends to 1/4, so no fanin escapes the memory-bound regime.
-  Right panel: the kernel's entire reachable intensity band against all three
-  machines' rooflines, with the measured points sitting on the memory roofs.
+  Right panel: the kernel's entire reachable intensity band against four
+  rooflines (i5-13500, RTX A4000, A100 80GB, GH200), with the measured points
+  sitting on the memory roofs. GPU figures are NVIDIA datasheet peaks, FP32
+  non-tensor, checked August 2026. Note the ridge points: A4000 43, GH200 17,
+  **A100 9.6** — datacentre parts are deliberately built with far more bandwidth
+  per FLOP than workstation parts, so they move *toward* this kernel, not away
+  from it.
 
 ## Porting to H100 and GH200
 

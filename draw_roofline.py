@@ -33,26 +33,33 @@ FIGS = os.path.join(HERE, "figures")
 
 FANIN = 8
 
-# name, peak GFLOP/s (FP32), achieved GB/s (measured by this repo), colour key
+# name, peak FP32 GFLOP/s (non-tensor), peak GB/s, measured GB/s or None, colour key
+#
+# Vendor figures, checked August 2026:
+#   RTX A4000    19.2 TF FP32, 448 GB/s      (NVIDIA RTX A4000 datasheet)
+#   A100 80GB    19.5 TF FP32, 2039 GB/s     (NVIDIA A100 80GB datasheet, SXM)
+#   GH200 H100   67  TF FP32, 4000 GB/s      (NVIDIA GH200 datasheet, 96GB HBM3)
+# The i5's peak FLOP/s is an estimate (14 cores, AVX2 FMA) and its bandwidth is
+# this repo's measured streaming rate, since the DIMM spec needs root to read.
+#
+# The three GPUs are an ORDERED series (448 < 2039 < 4000 GB/s), so they take an
+# orange ordinal ramp rather than three categorical hues: no fourth categorical
+# slot clears the normal-vision floor against the first three, and ordering is
+# the real relationship here anyway. Orange still means "GPU", as everywhere else.
 MACHINES = [
-    ("i5-13500 CPU", 1370.0, 48.9, "cpu"),
-    ("RTX A4000", 19170.0, 429.7, "gpu"),
-    ("GH200 (H100)", 67000.0, 2852.0, "alt"),
+    ("i5-13500 CPU", 1370.0, 48.9, 48.9, "cpu"),
+    ("RTX A4000", 19170.0, 448.0, 429.7, "g1"),
+    ("A100 80GB", 19500.0, 2039.0, None, "g2"),
+    ("GH200 (H100)", 67000.0, 4000.0, 2852.0, "g3"),
 ]
-# Bandwidth used to draw the memory roof. The GPUs use their vendor peak. The
-# CPU uses its MEASURED streaming bandwidth, because the DIMM spec on this box
-# is not readable without root -- so the CPU's measured point necessarily sits
-# on its own roof, and the slide says so rather than presenting it as a result.
-PEAK_BW = {"i5-13500 CPU": 48.9, "RTX A4000": 448.0, "GH200 (H100)": 4023.0}
-BW_KIND = {"i5-13500 CPU": "measured", "RTX A4000": "peak", "GH200 (H100)": "peak"}
 
 THEMES = {
     "light": dict(surface="#fcfcfb", ink="#0b0b0b", ink2="#52514e", muted="#898781",
-                  grid="#e1e0d9", axis="#c3c2b7",
-                  cpu="#2a78d6", gpu="#eb6834", alt="#1baf7a"),
+                  grid="#e1e0d9", axis="#c3c2b7", cpu="#2a78d6",
+                  g1="#f59b6b", g2="#eb6834", g3="#a2400f"),
     "dark": dict(surface="#1a1a19", ink="#ffffff", ink2="#c3c2b7", muted="#898781",
-                 grid="#2c2c2a", axis="#383835",
-                 cpu="#3987e5", gpu="#d95926", alt="#199e70"),
+                 grid="#2c2c2a", axis="#383835", cpu="#3987e5",
+                 g1="#f0a882", g2="#d95926", g3="#b04519"),
 }
 
 
@@ -114,23 +121,19 @@ def draw(theme):
     axr.text((lo * hi) ** 0.5, 1.2e5, "the kernel,\nany fanin", color=t["cpu"],
              fontsize=11.5, fontweight="bold", va="top", ha="center")
 
-    for name, peak, achieved, key in MACHINES:
-        bw = PEAK_BW[name]
-        axr.plot(x, np.minimum(peak, bw * x), color=t[key], linewidth=2.2, zorder=3,
-                 label=f"{name}  ({peak / 1000:.1f} TF, {bw:.0f} GB/s {BW_KIND[name]})")
-        ridge = peak / bw
-        axr.scatter([ridge], [peak], s=44, c=t[key], edgecolors=t["surface"],
-                    linewidths=1.6, zorder=4)
-        axr.text(ridge * 1.15, peak * 0.62, f"ridge {ridge:.0f}", color=t[key],
-                 fontsize=10, fontweight="bold")
-        # Measured: achieved bandwidth x this kernel's intensity.
-        axr.scatter([intensity(FANIN)], [achieved * intensity(FANIN)], s=95, marker="D",
-                    c=t[key], edgecolors=t["surface"], linewidths=1.8, zorder=5)
+    for name, peak, bw, achieved, key in MACHINES:
+        axr.plot(x, np.minimum(peak, bw * x), color=t[key], linewidth=2.4, zorder=3,
+                 label=f"{name}   {peak / 1000:.1f} TF · {bw:.0f} GB/s")
+        axr.scatter([peak / bw], [peak], s=40, c=t[key], edgecolors=t["surface"],
+                    linewidths=1.5, zorder=4)
+        if achieved is not None:
+            axr.scatter([intensity(FANIN)], [achieved * intensity(FANIN)], s=95, marker="D",
+                        c=t[key], edgecolors=t["surface"], linewidths=1.8, zorder=5)
 
     axr.set_xscale("log")
     axr.set_yscale("log")
     axr.set_xlim(x[0], x[-1])
-    axr.set_ylim(1, 2e5)
+    axr.set_ylim(1, 3e5)
     axr.get_xaxis().set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     axr.get_yaxis().set_major_formatter(
         FuncFormatter(lambda v, _: f"{v / 1000:g} TF" if v >= 1000 else f"{v:g}"))
@@ -141,22 +144,19 @@ def draw(theme):
     axr.set_title("Two orders of magnitude from every ridge point", color=t["ink"],
                   fontsize=14, fontweight="bold", loc="left", pad=12)
 
-    leg = axr.legend(loc="lower right", frameon=False, fontsize=10)
+    leg = axr.legend(loc="lower right", frameon=False, fontsize=10.5)
     for txt in leg.get_texts():
         txt.set_color(t["ink2"])
-    axr.scatter([], [], s=95, marker="D", c=t["muted"], edgecolors=t["surface"],
-                linewidths=1.8, label="measured")
-    axr.text(0.985, 0.30, "◆ measured — on the memory roof", transform=axr.transAxes,
-             color=t["ink2"], fontsize=10, ha="right")
+    axr.text(0.985, 0.315, "◆ = measured, this kernel", transform=axr.transAxes,
+             color=t["ink2"], fontsize=10.5, ha="right")
 
     fig.text(0.5, -0.02,
              "Left: intensity is (2K−1)/(8K+4), which tends to 1/4. Right: the shaded band is "
              "every intensity this kernel can reach; it never meets a ridge point.\n"
-             "Diamonds are measured throughput. The two GPU diamonds sit on vendor-peak "
-             "memory roofs at 96% and 71% — that is what \"memory bound\" means.\n"
-             "The CPU roof is its own measured streaming bandwidth (DIMM spec unreadable "
-             "without root), so that point is on its roof by construction. CPU peak FLOP/s "
-             "is an estimate.",
+             "Diamonds are this repo's measured throughput: the A4000 reaches 96% of its "
+             "vendor-peak memory roof and the GH200 71%. That is what \"memory bound\" means.\n"
+             "GPU figures are NVIDIA datasheet peaks (FP32 non-tensor). The CPU roof uses this "
+             "repo's measured streaming rate and its peak FLOP/s is an estimate.",
              color=t["muted"], fontsize=10.5, ha="center", va="top")
 
     out = FIGS if theme == "light" else os.path.join(FIGS, "dark")
